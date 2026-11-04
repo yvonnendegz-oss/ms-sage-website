@@ -1,0 +1,6 @@
+{
+  "name": "ms.sage creates",
+  "description": "Handcrafted crochet pieces made to move with you in Nairobi, Kenya. Explore ready drops and custom orders.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
