@@ -19,7 +19,11 @@ import {
   X,
   Send,
   HelpCircle,
+  Sliders,
+  Search,
+  RefreshCw,
 } from "lucide-react";
+import defaultHeroImage from "./assets/hero_featured.png";
 
 /* ==========================================================================
    PRODUCT DATA ARRAY (EDIT PRODUCT DETAILS HERE)
@@ -230,6 +234,184 @@ function resizeImageFile(file: File, maxDim = 1200): Promise<string> {
   });
 }
 
+interface ProcessedHeroArtwork {
+  trimmedUrl: string;
+  bgColor: string;
+}
+
+function processAndTrimArtwork(imageSrc: string): Promise<ProcessedHeroArtwork> {
+  const fallbackColor = "#D5E2D4";
+  return new Promise((resolve) => {
+    if (!imageSrc) {
+      resolve({ trimmedUrl: "", bgColor: fallbackColor });
+      return;
+    }
+
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (!w || !h || w <= 0 || h <= 0) {
+          resolve({ trimmedUrl: imageSrc, bgColor: fallbackColor });
+          return;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          resolve({ trimmedUrl: imageSrc, bgColor: fallbackColor });
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, w, h);
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const data = imgData.data;
+
+        // 1. Detect background color as the MODE (most common color among border pixels, with fallback #D5E2D4)
+        // Group border pixels into subtle buckets of 4 to handle slight compression artifacts
+        const colorCounts = new Map<string, { count: number; r: number; g: number; b: number }>();
+
+        const sampleBorderPixel = (idx: number) => {
+          const a = data[idx + 3];
+          if (a < 64) return; // ignore transparent edge pixels
+          const r = data[idx];
+          const g = data[idx + 1];
+          const b = data[idx + 2];
+          const key = `${Math.round(r / 4) * 4},${Math.round(g / 4) * 4},${Math.round(b / 4) * 4}`;
+          const existing = colorCounts.get(key);
+          if (existing) {
+            existing.count++;
+            existing.r += r;
+            existing.g += g;
+            existing.b += b;
+          } else {
+            colorCounts.set(key, { count: 1, r, g, b });
+          }
+        };
+
+        // Top and bottom borders (sample outer 2 rows)
+        for (let row = 0; row < Math.min(2, h); row++) {
+          for (let x = 0; x < w; x++) {
+            sampleBorderPixel((row * w + x) * 4);
+          }
+        }
+        for (let row = Math.max(0, h - 2); row < h; row++) {
+          for (let x = 0; x < w; x++) {
+            sampleBorderPixel((row * w + x) * 4);
+          }
+        }
+
+        // Left and right borders (sample outer 2 columns)
+        for (let y = 0; y < h; y++) {
+          for (let col = 0; col < Math.min(2, w); col++) {
+            sampleBorderPixel((y * w + col) * 4);
+          }
+          for (let col = Math.max(0, w - 2); col < w; col++) {
+            sampleBorderPixel((y * w + col) * 4);
+          }
+        }
+
+        let bgR = 213;
+        let bgG = 226;
+        let bgB = 212;
+
+        let maxCount = 0;
+        colorCounts.forEach((val) => {
+          if (val.count > maxCount) {
+            maxCount = val.count;
+            bgR = Math.round(val.r / val.count);
+            bgG = Math.round(val.g / val.count);
+            bgB = Math.round(val.b / val.count);
+          }
+        });
+
+        const toHex = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0");
+        const detectedBgColor = `#${toHex(bgR)}${toHex(bgG)}${toHex(bgB)}`;
+
+        // 2. Scan bounding box of artwork:
+        // Every pixel whose color differs from background color by more than tolerance of 12 (out of 255) per channel
+        let minX = w;
+        let maxX = -1;
+        let minY = h;
+        let maxY = -1;
+
+        const tolerance = 12;
+
+        for (let y = 0; y < h; y++) {
+          const rowOffset = y * w;
+          for (let x = 0; x < w; x++) {
+            const idx = (rowOffset + x) * 4;
+            const a = data[idx + 3];
+            if (a > 32) {
+              const r = data[idx];
+              const g = data[idx + 1];
+              const b = data[idx + 2];
+              if (
+                Math.abs(r - bgR) > tolerance ||
+                Math.abs(g - bgG) > tolerance ||
+                Math.abs(b - bgB) > tolerance
+              ) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+            }
+          }
+        }
+
+        // If no non-background pixels detected, return uncropped
+        if (maxX < minX || maxY < minY) {
+          resolve({ trimmedUrl: imageSrc, bgColor: detectedBgColor });
+          return;
+        }
+
+        // Add 3% padding on every side
+        const artworkW = maxX - minX + 1;
+        const artworkH = maxY - minY + 1;
+        const padX = Math.round(artworkW * 0.03);
+        const padY = Math.round(artworkH * 0.03);
+
+        const cropX = Math.max(0, minX - padX);
+        const cropY = Math.max(0, minY - padY);
+        const cropW = Math.min(w - cropX, (maxX + padX) - cropX + 1);
+        const cropH = Math.min(h - cropY, (maxY + padY) - cropY + 1);
+
+        if (cropW <= 0 || cropH <= 0) {
+          resolve({ trimmedUrl: imageSrc, bgColor: detectedBgColor });
+          return;
+        }
+
+        const cropCanvas = document.createElement("canvas");
+        cropCanvas.width = cropW;
+        cropCanvas.height = cropH;
+        const cropCtx = cropCanvas.getContext("2d");
+        if (!cropCtx) {
+          resolve({ trimmedUrl: imageSrc, bgColor: detectedBgColor });
+          return;
+        }
+
+        cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+        const trimmedUrl = cropCanvas.toDataURL("image/png");
+
+        resolve({ trimmedUrl, bgColor: detectedBgColor });
+      } catch {
+        resolve({ trimmedUrl: imageSrc, bgColor: fallbackColor });
+      }
+    };
+    img.onerror = () => resolve({ trimmedUrl: imageSrc, bgColor: fallbackColor });
+    img.src = imageSrc;
+  });
+}
+
+function detectImageEdgeColor(imageSrc: string): Promise<string> {
+  return processAndTrimArtwork(imageSrc).then((res) => res.bgColor);
+}
+
 /* ==========================================================================
    MICROSCOPE HEADING REVEAL COMPONENT
    Letter-by-letter focus animation from opacity 0, scale 1.8, blur(6px) -> 1, 1, 0
@@ -424,8 +606,8 @@ function ConfirmRemoveButton({ onConfirm }: { onConfirm: () => void }) {
       onClick={handleClick}
       className={`text-[#1F2B20] text-xs font-bold px-3 py-1.5 rounded-full shadow-sm cursor-pointer transition-colors whitespace-nowrap ${
         confirming
-          ? "bg-[#E0764A] text-[#FDFCF6] animate-pulse"
-          : "bg-[#FDFCF6] hover:bg-[#F7B8CB]"
+          ? "bg-[#E0764A] text-[#FFFFFF] animate-pulse"
+          : "bg-[#EEE7D6] hover:bg-[#F7B8CB]"
       }`}
     >
       {confirming ? "Tap again to confirm" : "Remove"}
@@ -433,40 +615,204 @@ function ConfirmRemoveButton({ onConfirm }: { onConfirm: () => void }) {
   );
 }
 
+const transparencyCache = new Map<string, boolean>();
+
+function checkImageCornersTransparent(imageSrc: string): Promise<boolean> {
+  if (!imageSrc) return Promise.resolve(false);
+  if (transparencyCache.has(imageSrc)) {
+    return Promise.resolve(transparencyCache.get(imageSrc)!);
+  }
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const w = Math.min(img.naturalWidth || img.width || 48, 48);
+        const h = Math.min(img.naturalHeight || img.height || 48, 48);
+        if (w <= 0 || h <= 0) {
+          resolve(false);
+          return;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          resolve(false);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        const imgData = ctx.getImageData(0, 0, w, h).data;
+
+        // Sample corners (0,0), (w-1, 0), (0, h-1), (w-1, h-1)
+        const corners = [
+          [0, 0],
+          [w - 1, 0],
+          [0, h - 1],
+          [w - 1, h - 1],
+          [1, 1],
+          [w - 2, 1],
+          [1, h - 2],
+          [w - 2, h - 2],
+        ];
+
+        let hasTransparent = false;
+        for (const [cx, cy] of corners) {
+          const idx = (cy * w + cx) * 4;
+          const alpha = imgData[idx + 3];
+          if (alpha < 240) {
+            hasTransparent = true;
+            break;
+          }
+        }
+        transparencyCache.set(imageSrc, hasTransparent);
+        resolve(hasTransparent);
+      } catch {
+        resolve(false);
+      }
+    };
+    img.onerror = () => resolve(false);
+    img.src = imageSrc;
+  });
+}
+
+function DeleteCardButton({
+  onDelete,
+  disabled,
+}: {
+  onDelete: () => void;
+  disabled?: boolean;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (disabled) return;
+    if (!confirming) {
+      setConfirming(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        setConfirming(false);
+      }, 3000);
+    } else {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setConfirming(false);
+      onDelete();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  if (disabled) {
+    return (
+      <button
+        type="button"
+        disabled
+        title="At least one card must remain in this row"
+        className="opacity-30 cursor-not-allowed p-1.5 rounded-full bg-[#FFFFFF]/90 text-[#1F2B20] shadow-xs border border-[rgba(31,43,32,0.10)]"
+        aria-label="Cannot delete only card"
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      aria-label={confirming ? "Tap again to confirm deletion" : "Delete card"}
+      className={`text-[11px] font-bold transition-all shadow-md cursor-pointer whitespace-nowrap z-20 flex items-center gap-1 border border-[rgba(31,43,32,0.12)] ${
+        confirming
+          ? "bg-[#E0764A] text-[#FFFFFF] px-2.5 py-1 rounded-full animate-pulse"
+          : "p-1.5 rounded-full bg-[#FFFFFF]/90 hover:bg-[#F7B8CB] text-[#1F2B20]/80 hover:text-[#1F2B20] backdrop-blur-xs"
+      }`}
+    >
+      <Trash2 className="w-3.5 h-3.5" />
+      {confirming && <span>Tap again to confirm</span>}
+    </button>
+  );
+}
+
 /* ==========================================================================
    PRODUCT IMAGE AREA COMPONENT
-   Image placeholder blocks & empty slots: tint #C5D4B8, dashed outlines #4E6B43/50
+   Image placeholder blocks & empty slots: tint #E9E3D3, dashed outlines #6F8F5F at 50% opacity
+   Fit mode: contain with blurred backdrop (or #F5EFE3 for transparent cutouts)
+   Fill mode: cover (default)
    ========================================================================== */
 
 function ProductImageArea({
   product,
   photoUrl,
   editMode,
+  fitMode = "fill",
+  onSetFit,
   onUpload,
   onRemove,
 }: {
   product: Product;
   photoUrl?: string;
   editMode: boolean;
+  fitMode?: "fill" | "fit";
+  onSetFit?: (fit: "fill" | "fit") => void;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onRemove: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isTransparent, setIsTransparent] = useState(false);
+
+  useEffect(() => {
+    if (photoUrl && fitMode === "fit") {
+      checkImageCornersTransparent(photoUrl).then((transparent) => {
+        setIsTransparent(transparent);
+      });
+    }
+  }, [photoUrl, fitMode]);
 
   if (photoUrl) {
+    const isFit = fitMode === "fit";
+
     return (
-      <div className="aspect-[4/5] w-full rounded-[16px] overflow-hidden relative group mb-4 bg-[#C5D4B8]">
-        <img
-          src={photoUrl}
-          alt={product.name}
-          className="w-full h-full object-cover"
-        />
+      <div className="aspect-[4/5] w-full rounded-[16px] overflow-hidden relative group mb-4 bg-[#E9E3D3]">
+        {/* Fit mode: blurred backdrop or soft tint #F5EFE3 */}
+        {isFit ? (
+          <div className="w-full h-full relative overflow-hidden flex items-center justify-center">
+            {isTransparent ? (
+              <div className="absolute inset-0 bg-[#F5EFE3]" />
+            ) : (
+              <img
+                src={photoUrl}
+                alt=""
+                aria-hidden="true"
+                className="absolute inset-0 w-full h-full object-cover scale-[1.25] blur-[24px] pointer-events-none select-none"
+              />
+            )}
+            <img
+              src={photoUrl}
+              alt={product.name}
+              className="relative z-10 w-full h-full object-contain"
+            />
+          </div>
+        ) : (
+          <img
+            src={photoUrl}
+            alt={product.name}
+            className="w-full h-full object-cover"
+          />
+        )}
+
+        {/* Edit mode: Change & Remove buttons in center overlay */}
         {editMode && (
-          <div className="absolute inset-0 bg-[#1F2B20]/45 flex items-center justify-center gap-2 p-2 transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100 [@media(hover:none)]:!opacity-100">
+          <div className="absolute inset-0 bg-[#1F2B20]/45 flex items-center justify-center gap-2 p-2 transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100 [@media(hover:none)]:!opacity-100 z-20">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="bg-[#FDFCF6] hover:bg-[#FFF1B5] text-[#1F2B20] text-xs font-bold px-3 py-1.5 rounded-full shadow-sm cursor-pointer transition-colors"
+              className="bg-[#FFFFFF] hover:bg-[#EEE7D6] text-[#1F2B20] text-xs font-bold px-3 py-1.5 rounded-full shadow-sm cursor-pointer transition-colors"
             >
               Change
             </button>
@@ -480,28 +826,67 @@ function ProductImageArea({
             />
           </div>
         )}
+
+        {/* Edit mode only: small toggle button "Fit / Fill" in bottom-left corner */}
+        {editMode && onSetFit && (
+          <div className="absolute bottom-2 left-2 z-30">
+            <div className="inline-flex items-center bg-[#FFFFFF]/95 backdrop-blur-xs rounded-full p-0.5 shadow-md border border-[rgba(31,43,32,0.12)] text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSetFit("fit");
+                }}
+                className={`px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                  isFit
+                    ? "bg-[#6F8F5F] text-[#FFFFFF]"
+                    : "text-[#1F2B20]/80 hover:text-[#1F2B20]"
+                }`}
+                aria-label="Fit photo in card"
+              >
+                Fit
+              </button>
+              <span className="text-[#1F2B20]/30 text-[10px]">/</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSetFit("fill");
+                }}
+                className={`px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                  !isFit
+                    ? "bg-[#6F8F5F] text-[#FFFFFF]"
+                    : "text-[#1F2B20]/80 hover:text-[#1F2B20]"
+                }`}
+                aria-label="Fill photo in card"
+              >
+                Fill
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // When edit mode is OFF: plain soft tinted placeholder #C5D4B8 with dashed outline in #4E6B43 at 50% opacity
+  // When edit mode is OFF: plain warm neutral placeholder #E9E3D3 with dashed outline in #6F8F5F at 50% opacity
   if (!editMode) {
     return (
-      <div className="aspect-[4/5] w-full rounded-[16px] mb-4 bg-[#C5D4B8] border-2 border-dashed border-[#4E6B43]/50" />
+      <div className="aspect-[4/5] w-full rounded-[16px] mb-4 bg-[#E9E3D3] border-2 border-dashed border-[#6F8F5F]/50" />
     );
   }
 
-  // When edit mode is ON: upload prompt with tint #C5D4B8 and dashed outline in #4E6B43 at 50% opacity
+  // When edit mode is ON: upload prompt with warm neutral #E9E3D3 and dashed outline in #6F8F5F at 50% opacity
   return (
     <div className="aspect-[4/5] w-full mb-4">
-      <label className="w-full h-full border-2 border-dashed border-[#4E6B43]/50 rounded-[16px] bg-[#C5D4B8] hover:bg-[#C5D4B8]/80 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors group">
+      <label className="w-full h-full border-2 border-dashed border-[#6F8F5F]/50 rounded-[16px] bg-[#E9E3D3] hover:bg-[#E9E3D3]/80 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors group">
         <input
           type="file"
           accept="image/*"
           className="hidden"
           onChange={onUpload}
         />
-        <div className="w-9 h-9 rounded-full bg-[#FDFCF6] group-hover:bg-[#FFF1B5] flex items-center justify-center text-[#4E6B43] shadow-xs transition-colors">
+        <div className="w-9 h-9 rounded-full bg-[#FFFFFF] group-hover:bg-[#EEE7D6] flex items-center justify-center text-[#6F8F5F] shadow-xs transition-colors">
           <Plus className="w-5 h-5 stroke-[2.5]" />
         </div>
         <span className="text-xs font-bold uppercase tracking-wider text-[#1F2B20]/80 group-hover:text-[#1F2B20]">
@@ -521,11 +906,17 @@ function MobileCardDeck({
   products,
   savedImages,
   cardEdits,
+  cardFit,
+  cardStatus,
   editMode,
   onSelectProductForOrder,
   onImageUpload,
   onImageRemove,
   onCardTextChange,
+  onSetCardFit,
+  onToggleStatus,
+  onDeleteCard,
+  onAddCard,
   handleKeyDownNoEnter,
   getProductField,
   isPastCreations = false,
@@ -533,11 +924,17 @@ function MobileCardDeck({
   products: Product[];
   savedImages: Record<string, string>;
   cardEdits: Record<string, { name?: string; label?: string; description?: string; price?: string }>;
+  cardFit: Record<string, "fill" | "fit">;
+  cardStatus?: Record<string, "sold" | "available">;
   editMode: boolean;
   onSelectProductForOrder?: (product: Product) => void;
   onImageUpload: (key: string, file: File) => void;
   onImageRemove: (key: string) => void;
   onCardTextChange: (id: string, field: "name" | "label" | "description" | "price", value: string) => void;
+  onSetCardFit: (id: string, fit: "fill" | "fit") => void;
+  onToggleStatus?: (id: string) => void;
+  onDeleteCard?: (id: string) => void;
+  onAddCard?: () => void;
   handleKeyDownNoEnter: (e: React.KeyboardEvent<HTMLElement>) => void;
   getProductField: (product: Product, field: "name" | "label" | "description" | "price") => string;
   isPastCreations?: boolean;
@@ -547,6 +944,19 @@ function MobileCardDeck({
   const [dragX, setDragX] = useState(0);
   const [animating, setAnimating] = useState<"left" | "right" | "rubber" | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    if (currentIndex >= products.length) {
+      setCurrentIndex(Math.max(0, products.length - 1));
+    }
+  }, [products.length, currentIndex]);
+
+  const handleAddCardUnderDeck = () => {
+    if (onAddCard) {
+      onAddCard();
+      setCurrentIndex(products.length);
+    }
+  };
 
   const deckRef = useRef<HTMLDivElement>(null);
   const startXRef = useRef(0);
@@ -819,7 +1229,7 @@ function MobileCardDeck({
           transform: `translateX(${dragX}px) rotate(${dragX / 20}deg)`,
           opacity: 1,
           zIndex: 30,
-          boxShadow: "0 18px 30px rgba(31, 43, 32, 0.18)",
+          boxShadow: "0 18px 30px rgba(60, 45, 20, 0.16)",
           transition: "none",
         };
       }
@@ -828,7 +1238,7 @@ function MobileCardDeck({
           transform: `translateX(${dragX - cardWidthRef.current}px) rotate(${(dragX - cardWidthRef.current) / 20}deg)`,
           opacity: 1,
           zIndex: 35,
-          boxShadow: "0 18px 30px rgba(31, 43, 32, 0.18)",
+          boxShadow: "0 18px 30px rgba(60, 45, 20, 0.16)",
           transition: "none",
         };
       }
@@ -841,7 +1251,7 @@ function MobileCardDeck({
           transform: `translate(0, ${dy}px) scale(${s}) rotate(${rot}deg)`,
           opacity: 1,
           zIndex: 20,
-          boxShadow: "0 18px 30px rgba(31, 43, 32, 0.14)",
+          boxShadow: "0 18px 30px rgba(60, 45, 20, 0.12)",
           transition: "none",
         };
       }
@@ -854,7 +1264,7 @@ function MobileCardDeck({
           transform: `translate(0, ${dy}px) scale(${s}) rotate(${rot}deg)`,
           opacity: 1,
           zIndex: 10,
-          boxShadow: "0 18px 30px rgba(31, 43, 32, 0.08)",
+          boxShadow: "0 18px 30px rgba(60, 45, 20, 0.08)",
           transition: "none",
         };
       }
@@ -866,7 +1276,7 @@ function MobileCardDeck({
         transform: "translate(0, 0) scale(1) rotate(0deg)",
         opacity: 1,
         zIndex: 30,
-        boxShadow: "0 18px 30px rgba(31, 43, 32, 0.18)",
+        boxShadow: "0 18px 30px rgba(60, 45, 20, 0.16)",
         transition: "transform 250ms ease-out, opacity 250ms ease-out",
       };
     }
@@ -875,7 +1285,7 @@ function MobileCardDeck({
         transform: "translate(0, 12px) scale(0.95) rotate(2deg)",
         opacity: 1,
         zIndex: 20,
-        boxShadow: "0 18px 30px rgba(31, 43, 32, 0.12)",
+        boxShadow: "0 18px 30px rgba(60, 45, 20, 0.12)",
         transition: "transform 250ms ease-out, opacity 250ms ease-out",
       };
     }
@@ -884,7 +1294,7 @@ function MobileCardDeck({
         transform: "translate(0, 24px) scale(0.90) rotate(-2deg)",
         opacity: 1,
         zIndex: 10,
-        boxShadow: "0 18px 30px rgba(31, 43, 32, 0.08)",
+        boxShadow: "0 18px 30px rgba(60, 45, 20, 0.08)",
         transition: "transform 250ms ease-out, opacity 250ms ease-out",
       };
     }
@@ -898,7 +1308,7 @@ function MobileCardDeck({
       style={{ touchAction: "pan-y" }}
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      aria-label={`${isPastCreations ? "Past creations" : "In stock pieces"} card deck, swipe or use arrow keys`}
+      aria-label={`${isPastCreations ? "Past creations" : "Recent creations"} card deck, swipe or use arrow keys`}
     >
       <div className="sr-only" aria-live="polite">
         Piece {currentIndex + 1} of {products.length}
@@ -926,13 +1336,25 @@ function MobileCardDeck({
             <article
               key={product.id}
               style={cardStyle}
-              className="absolute inset-x-0 top-0 bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between border border-[#D3DFC8] will-change-transform"
+              className="absolute inset-x-0 top-0 bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] will-change-transform relative"
             >
+              {/* Delete card button (top-right corner in edit mode) */}
+              {editMode && isTopCard && onDeleteCard && (
+                <div className="absolute top-2.5 right-2.5 z-30">
+                  <DeleteCardButton
+                    onDelete={() => onDeleteCard(product.id)}
+                    disabled={products.length <= 1}
+                  />
+                </div>
+              )}
+
               <div>
                 <ProductImageArea
                   product={product}
                   photoUrl={photoUrl}
                   editMode={editMode && isTopCard}
+                  fitMode={cardFit[product.id] || "fill"}
+                  onSetFit={(fit) => onSetCardFit(product.id, fit)}
                   onUpload={(e) => {
                     if (e.target.files?.[0]) {
                       onImageUpload(product.id, e.target.files[0]);
@@ -952,8 +1374,8 @@ function MobileCardDeck({
                       : undefined
                   }
                   title={editMode && isTopCard ? "Click to edit label" : undefined}
-                  className={`text-[13px] font-bold uppercase tracking-wider text-[#4E6B43] mb-1 outline-none rounded px-1 -mx-1 transition-colors ${
-                    editMode && isTopCard ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                  className={`text-[13px] font-bold uppercase tracking-wider text-[#6F8F5F] mb-1 outline-none rounded px-1 -mx-1 transition-colors ${
+                    editMode && isTopCard ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                   }`}
                 >
                   {label}
@@ -971,7 +1393,7 @@ function MobileCardDeck({
                   }
                   title={editMode && isTopCard ? "Click to edit name" : undefined}
                   className={`font-heading text-xl text-[#1F2B20] leading-snug mb-1.5 tracking-[0.02em] outline-none rounded px-1 -mx-1 transition-colors ${
-                    editMode && isTopCard ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                    editMode && isTopCard ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                   }`}
                 >
                   {name}
@@ -988,14 +1410,14 @@ function MobileCardDeck({
                   }
                   title={editMode && isTopCard ? "Click to edit description" : undefined}
                   className={`text-[#1F2B20]/75 text-sm line-clamp-2 mb-3 outline-none rounded px-1 -mx-1 transition-colors ${
-                    editMode && isTopCard ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                    editMode && isTopCard ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                   }`}
                 >
                   {description}
                 </p>
               </div>
 
-              <div className="flex items-center justify-between pt-3 border-t border-[#D3DFC8]/80 mt-2">
+              <div className="flex items-center justify-between pt-3 border-t border-[rgba(60,45,20,0.08)] mt-2">
                 <span
                   contentEditable={editMode && isTopCard}
                   suppressContentEditableWarning={true}
@@ -1007,7 +1429,7 @@ function MobileCardDeck({
                   }
                   title={editMode && isTopCard ? "Click to edit price" : undefined}
                   className={`text-[#E0764A] font-bold text-lg outline-none rounded px-1 -mx-1 transition-colors ${
-                    editMode && isTopCard ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                    editMode && isTopCard ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                   }`}
                 >
                   {price}
@@ -1019,14 +1441,54 @@ function MobileCardDeck({
                     onClick={() => {
                       if (onSelectProductForOrder) onSelectProductForOrder(product);
                     }}
-                    className="bg-[#4E6B43] hover:bg-[#3F5A36] text-[#FDFCF6] text-xs font-bold px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
+                    className="bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] text-xs font-bold px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
                   >
                     Order this
                   </button>
                 ) : (
-                  <span className="bg-[#FFF1B5] text-[#1F2B20] text-xs font-black px-3.5 py-1.5 rounded-full uppercase tracking-wider shadow-xs">
-                    Sold
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {editMode && isTopCard && onToggleStatus ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleStatus(product.id);
+                        }}
+                        className={`text-xs font-black px-3 py-1.5 rounded-full uppercase tracking-wider shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors ${
+                          (cardStatus?.[product.id] || "sold") === "available"
+                            ? "bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF]"
+                            : "bg-[#FFF1B5] hover:bg-[#FFF1B5]/85 text-[#1F2B20]"
+                        }`}
+                        title="Tap to switch status between Sold and Available"
+                        aria-label={`Status: ${(cardStatus?.[product.id] || "sold") === "available" ? "Available" : "Sold"}. Tap to switch.`}
+                      >
+                        <span>{(cardStatus?.[product.id] || "sold") === "available" ? "Available" : "Sold"}</span>
+                        <RefreshCw className="w-3 h-3 shrink-0" />
+                      </button>
+                    ) : (
+                      <span
+                        className={`text-xs font-black px-3.5 py-1.5 rounded-full uppercase tracking-wider shadow-xs ${
+                          (cardStatus?.[product.id] || "sold") === "available"
+                            ? "bg-[#6F8F5F] text-[#FFFFFF]"
+                            : "bg-[#FFF1B5] text-[#1F2B20]"
+                        }`}
+                      >
+                        {(cardStatus?.[product.id] || "sold") === "available" ? "Available" : "Sold"}
+                      </span>
+                    )}
+
+                    {(cardStatus?.[product.id] || "sold") === "available" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onSelectProductForOrder) onSelectProductForOrder(product);
+                        }}
+                        className="bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] text-xs font-bold px-3.5 py-1.5 rounded-full transition-colors cursor-pointer shadow-xs whitespace-nowrap"
+                      >
+                        Order this
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </article>
@@ -1041,18 +1503,33 @@ function MobileCardDeck({
             key={dotIdx}
             type="button"
             onClick={() => setCurrentIndex(dotIdx)}
-            aria-label={`Go to piece ${dotIdx + 1}`}
+            aria-label={`Go to piece ${dotIdx + 1} of ${products.length}`}
             className={`rounded-full transition-all ${
               currentIndex === dotIdx
-                ? "w-6 h-2 bg-[#4E6B43]"
-                : "w-2 h-2 bg-[#D3DFC8] hover:bg-[#4E6B43]/50"
+                ? "w-6 h-2 bg-[#6F8F5F]"
+                : "w-2 h-2 bg-[#EEE7D6] hover:bg-[#6F8F5F]/50"
             }`}
           />
         ))}
       </div>
-      <p className="text-xs font-semibold text-[#1F2B20]/60 mt-1 select-none">
-        Swipe to see more
+      <p className="text-xs font-semibold text-[#1F2B20]/60 mt-1 select-none text-center">
+        Piece {currentIndex + 1} of {products.length} · Swipe to see more
       </p>
+
+      {/* On phones, show "+ Add card" button directly under each deck in edit mode */}
+      {editMode && products.length < 12 && onAddCard && (
+        <div className="mt-3 flex justify-center">
+          <button
+            type="button"
+            onClick={handleAddCardUnderDeck}
+            className="border-2 border-dashed border-[#6F8F5F]/60 bg-[#FFFFFF] hover:bg-[#EEE7D6] text-[#1F2B20] text-xs font-bold px-4 py-2 rounded-full shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            aria-label={`Add card to ${isPastCreations ? "Past Creations" : "Recent Creations"}`}
+          >
+            <Plus className="w-4 h-4 stroke-[2.5] text-[#6F8F5F]" />
+            <span>+ Add card ({products.length}/12)</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1177,16 +1654,6 @@ export default function App() {
     }, 2400);
   };
 
-  // Slow hero zoom state (100% -> 105% over 12s on page load, once)
-  const [heroZoomed, setHeroZoomed] = useState(false);
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    if (!media.matches) {
-      const timer = setTimeout(() => setHeroZoomed(true), 60);
-      return () => clearTimeout(timer);
-    }
-  }, []);
-
   // Order form state
   const [orderCustomerName, setOrderCustomerName] = useState("");
   const [orderType, setOrderType] = useState<string>("In-stock piece");
@@ -1236,6 +1703,21 @@ export default function App() {
     return () => {
       sections.forEach((sec) => observer.unobserve(sec));
     };
+  }, []);
+
+  // Track scroll position: transparent under 40px, regain colors past 40px
+  const [isScrolled, setIsScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      // Threshold: 40px from top
+      const scrolled = window.scrollY > 40;
+      setIsScrolled(scrolled);
+    };
+
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
 
@@ -1310,13 +1792,191 @@ export default function App() {
     });
   };
 
-  const inStockProducts = PRODUCTS.filter((p) => p.category === "in-stock");
-  const pastCreationsProducts = PRODUCTS.filter((p) => p.category === "past-creation");
+  // 6. Products list state (persisted in localStorage)
+  const [products, setProducts] = useState<Product[]>(() => {
+    try {
+      if (typeof window !== "undefined") {
+        const saved = localStorage.getItem("ms_sage_products_custom");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return PRODUCTS;
+  });
 
+  const persistProducts = (newProducts: Product[]) => {
+    setProducts(newProducts);
+    try {
+      localStorage.setItem("ms_sage_products_custom", JSON.stringify(newProducts));
+    } catch {
+      // Ignore storage error
+    }
+  };
+
+  // 7. Card fit setting per card ("fill" | "fit")
+  const [cardFit, setCardFit] = useState<Record<string, "fill" | "fit">>(() => {
+    try {
+      if (typeof window !== "undefined") {
+        const saved = localStorage.getItem("ms_sage_card_fit");
+        if (saved) return JSON.parse(saved);
+      }
+    } catch {
+      // fallback
+    }
+    return {};
+  });
+
+  const handleSetCardFit = (productId: string, fit: "fill" | "fit") => {
+    setCardFit((prev) => {
+      const next = { ...prev, [productId]: fit };
+      try {
+        localStorage.setItem("ms_sage_card_fit", JSON.stringify(next));
+      } catch {
+        // Ignore storage error
+      }
+      return next;
+    });
+  };
+
+  // 8. Card status per card in Past Creations ("sold" | "available", default: "sold")
+  const [cardStatus, setCardStatus] = useState<Record<string, "sold" | "available">>(() => {
+    try {
+      if (typeof window !== "undefined") {
+        const saved = localStorage.getItem("ms_sage_card_status");
+        if (saved) return JSON.parse(saved);
+      }
+    } catch {
+      // fallback
+    }
+    return {};
+  });
+
+  const handleToggleCardStatus = (productId: string) => {
+    setCardStatus((prev) => {
+      const current = prev[productId] || "sold";
+      const nextStatus: "sold" | "available" = current === "sold" ? "available" : "sold";
+      const next: Record<string, "sold" | "available"> = { ...prev, [productId]: nextStatus };
+      try {
+        localStorage.setItem("ms_sage_card_status", JSON.stringify(next));
+      } catch {
+        // Ignore storage error
+      }
+      return next;
+    });
+  };
+
+  // Add Card handler
+  const handleAddCard = (category: "in-stock" | "past-creation") => {
+    const existingCount = products.filter((p) => p.category === category).length;
+    if (existingCount >= 12) return;
+
+    const newId = `prod-${category}-${Date.now()}`;
+    const newProduct: Product = {
+      id: newId,
+      name: "Lorem Ipsum Dolor",
+      category,
+      label: "LOREM IPSUM",
+      description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+      price: "KES 0,000",
+    };
+
+    const nextProducts = [...products, newProduct];
+    persistProducts(nextProducts);
+
+    // Default to Fill mode
+    setCardFit((prev) => {
+      const next = { ...prev, [newId]: "fill" as const };
+      try {
+        localStorage.setItem("ms_sage_card_fit", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    // New cards added to Past Creations start as Sold
+    if (category === "past-creation") {
+      setCardStatus((prev) => {
+        const next = { ...prev, [newId]: "sold" as const };
+        try {
+          localStorage.setItem("ms_sage_card_status", JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    }
+
+    showToast("Added new card");
+  };
+
+  // Delete Card handler (needs two taps to confirm, disabled if 1 card left)
+  const handleDeleteCard = async (productId: string) => {
+    const targetProduct = products.find((p) => p.id === productId);
+    if (!targetProduct) return;
+
+    const remainingInRow = products.filter((p) => p.category === targetProduct.category).length;
+    if (remainingInRow <= 1) {
+      showToast("Cannot delete the only card in this row");
+      return;
+    }
+
+    const nextProducts = products.filter((p) => p.id !== productId);
+    persistProducts(nextProducts);
+
+    await removeImageFromStorage(productId);
+    setSavedImages((prev) => {
+      const copy = { ...prev };
+      delete copy[productId];
+      return copy;
+    });
+
+    setCardEdits((prev) => {
+      const copy = { ...prev };
+      delete copy[productId];
+      try {
+        localStorage.setItem("ms_sage_card_edits", JSON.stringify(copy));
+      } catch {}
+      return copy;
+    });
+
+    setCardFit((prev) => {
+      const copy = { ...prev };
+      delete copy[productId];
+      try {
+        localStorage.setItem("ms_sage_card_fit", JSON.stringify(copy));
+      } catch {}
+      return copy;
+    });
+
+    setCardStatus((prev) => {
+      const copy = { ...prev };
+      delete copy[productId];
+      try {
+        localStorage.setItem("ms_sage_card_status", JSON.stringify(copy));
+      } catch {}
+      return copy;
+    });
+
+    setBasket((prev) => {
+      const copy = prev.filter((item) => item.productId !== productId);
+      try {
+        localStorage.setItem("ms_sage_basket", JSON.stringify(copy));
+      } catch {}
+      return copy;
+    });
+
+    showToast("Card deleted");
+  };
+
+  const inStockProducts = products.filter((p) => p.category === "in-stock");
+  const pastCreationsProducts = products.filter((p) => p.category === "past-creation");
 
   // Helper to get product name using current (edited) card text
   const getItemName = (productId: string): string => {
-    const product = PRODUCTS.find((p) => p.id === productId);
+    const product = products.find((p) => p.id === productId);
     if (!product) return "Crochet piece";
     return getProductField(product, "name");
   };
@@ -1426,10 +2086,26 @@ export default function App() {
     setWhatsappStatusNote("WhatsApp is opening. Tap Send there to finish your order.");
   };
 
-  const heroImage = savedImages["hero_featured"];
+  const heroImage = savedImages["hero_featured"] || defaultHeroImage;
+  const [heroAspectRatio, setHeroAspectRatio] = useState<number>(1024 / 572);
+
+  useEffect(() => {
+    if (!heroImage) return;
+    const img = new Image();
+    img.onload = () => {
+      if (img.naturalWidth && img.naturalHeight) {
+        setHeroAspectRatio(img.naturalWidth / img.naturalHeight);
+      }
+    };
+    img.src = heroImage;
+  }, [heroImage]);
+
+  const isNarrow = heroAspectRatio < 1.72;
+
+  const navIsSolid = isScrolled || mobileMenuOpen;
 
   return (
-    <div className="min-h-dvh bg-[#E2EAD8] text-[#1F2B20] selection:bg-[#FFF1B5] selection:text-[#1F2B20] flex flex-col items-center">
+    <div className="min-h-dvh bg-[#F7F1E5] text-[#1F2B20] selection:bg-[#FFF1B5] selection:text-[#1F2B20] flex flex-col items-center">
       {/* -----------------------------------------------------------------------
           HEADER & NAVIGATION
           ----------------------------------------------------------------------- */}
@@ -1438,53 +2114,65 @@ export default function App() {
           {/* Main Nav Bar */}
           <nav
             aria-label="Main Navigation"
-            className="w-full bg-[#FFFFFF] rounded-2xl md:rounded-full px-4 sm:px-8 py-2.5 md:py-3 flex items-center justify-between border border-[#1F2B20]/10 shadow-[0_10px_25px_rgba(31,43,32,0.12)]"
+            className={`w-full rounded-2xl md:rounded-full px-4 sm:px-8 py-2.5 md:py-3 flex items-center justify-between transition-all duration-250 ease-out ${
+              navIsSolid
+                ? "bg-[#FFFFFF] border border-[#1F2B20]/10 shadow-[0_10px_25px_rgba(60,45,20,0.08)]"
+                : "bg-transparent border border-transparent shadow-none"
+            }`}
           >
             {/* --- PHONE NAV (<= 768px: md:hidden) --- */}
             <div className="flex md:hidden items-center justify-between w-full relative">
-              {/* Far left: Hamburger menu icon */}
-              <div className="flex items-center justify-start z-10 shrink-0">
+              {/* Far left: "ms.sage" wordmark + "CREATES" pill */}
+              <div className="flex items-center gap-1.5 min-[380px]:gap-2 shrink-0 select-none">
+                <span className="font-heading text-[22px] min-[360px]:text-2xl sm:text-3xl leading-none text-[#1F2B20] tracking-[0.02em] whitespace-nowrap">
+                  ms.sage
+                </span>
+                <span className="bg-[#DDEBD3] text-[#1F2B20] text-[9px] min-[360px]:text-[10px] font-black px-1.5 min-[360px]:px-2 py-0.5 rounded-full uppercase tracking-wider whitespace-nowrap leading-none">
+                  CREATES
+                </span>
+              </div>
+
+              {/* Far right: Search icon, Cart icon, Hamburger menu icon */}
+              <div className="flex items-center gap-1 sm:gap-1.5 z-10 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveSection("shop");
+                    const el = document.getElementById("shop");
+                    el?.scrollIntoView({ behavior: "smooth" });
+                  }}
+                  aria-label="Search or explore shop"
+                  className="w-9 h-9 rounded-full flex items-center justify-center text-[#1F2B20] hover:text-[#6F8F5F] hover:bg-[#EEE7D6]/60 transition-colors duration-250 cursor-pointer"
+                >
+                  <Search className="w-5 h-5 stroke-[2]" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setCartOpen(true)}
+                  aria-label={totalBasketItems > 0 ? `Shopping cart, ${totalBasketItems} items` : "Shopping cart"}
+                  className="relative w-9 h-9 rounded-full flex items-center justify-center text-[#1F2B20] hover:text-[#6F8F5F] hover:bg-[#EEE7D6]/60 transition-colors duration-250 cursor-pointer"
+                >
+                  <ShoppingCart className="w-5 h-5 stroke-[2]" />
+                  {totalBasketItems > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-[#6F8F5F] text-[#FFFFFF] text-[10px] font-black min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center shadow-xs leading-none">
+                      {totalBasketItems}
+                    </span>
+                  )}
+                  <span className="sr-only">{totalBasketItems} items in cart</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                   aria-label="Toggle navigation menu"
-                  className="w-9 h-9 rounded-full flex items-center justify-center text-[#1F2B20] hover:text-[#4E6B43] hover:bg-[#D3DFC8]/60 transition-colors cursor-pointer"
+                  className="w-9 h-9 rounded-full flex items-center justify-center text-[#1F2B20] hover:text-[#6F8F5F] hover:bg-[#EEE7D6]/60 transition-colors duration-250 cursor-pointer"
                 >
                   {mobileMenuOpen ? (
                     <X className="w-5 h-5 stroke-[2.2]" />
                   ) : (
                     <Menu className="w-5 h-5 stroke-[2.2]" />
                   )}
-                </button>
-              </div>
-
-              {/* Center: "ms.sage" wordmark with small "CREATES" pill exactly centered */}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-12">
-                <div className="flex items-center gap-1.5 min-[380px]:gap-2 shrink-0 pointer-events-auto">
-                  <span className="font-heading text-[18px] min-[360px]:text-xl sm:text-2xl text-[#1F2B20] tracking-[0.02em] whitespace-nowrap leading-none">
-                    ms.sage
-                  </span>
-                  <span className="bg-[#DDEBD3] text-[#1F2B20] text-[9px] min-[360px]:text-[10px] font-black px-1.5 min-[360px]:px-2 py-0.5 rounded-full uppercase tracking-wider whitespace-nowrap leading-none">
-                    CREATES
-                  </span>
-                </div>
-              </div>
-
-              {/* Far right: Cart icon */}
-              <div className="flex items-center gap-1 sm:gap-1.5 z-10 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setCartOpen(true)}
-                  aria-label={totalBasketItems > 0 ? `Shopping cart, ${totalBasketItems} items` : "Shopping cart"}
-                  className="relative w-9 h-9 rounded-full flex items-center justify-center text-[#1F2B20] hover:text-[#4E6B43] hover:bg-[#D3DFC8]/60 transition-colors cursor-pointer"
-                >
-                  <ShoppingCart className="w-5 h-5 stroke-[2]" />
-                  {totalBasketItems > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-[#4E6B43] text-[#FDFCF6] text-[10px] font-black min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center shadow-xs leading-none">
-                      {totalBasketItems}
-                    </span>
-                  )}
-                  <span className="sr-only">{totalBasketItems} items in cart</span>
                 </button>
               </div>
             </div>
@@ -1497,16 +2185,22 @@ export default function App() {
                   href="#shop"
                   onClick={() => setActiveSection("shop")}
                   aria-current={activeSection === "shop" ? "true" : undefined}
-                  className={`relative py-1 text-[16px] md:text-[17px] transition-colors select-none ${
+                  className={`relative py-1 text-[16px] md:text-[17px] transition-colors duration-250 select-none ${
                     activeSection === "shop"
-                      ? "text-[#4E6B43] font-extrabold"
-                      : "text-[#1F2B20] font-bold hover:text-[#4E6B43]"
+                      ? navIsSolid
+                        ? "text-[#6F8F5F] font-extrabold"
+                        : "text-[#1F2B20] font-extrabold"
+                      : navIsSolid
+                        ? "text-[#1F2B20] font-bold hover:text-[#6F8F5F]"
+                        : "text-[#1F2B20] font-bold hover:opacity-75"
                   }`}
                 >
                   <span>Shop</span>
                   {activeSection === "shop" && (
                     <span
-                      className="absolute -bottom-1.5 left-0 right-0 h-[3px] bg-[#4E6B43] rounded-full"
+                      className={`absolute -bottom-1.5 left-0 right-0 h-[3px] rounded-full transition-colors duration-250 ${
+                        navIsSolid ? "bg-[#6F8F5F]" : "bg-[#1F2B20]"
+                      }`}
                       aria-hidden="true"
                     />
                   )}
@@ -1516,16 +2210,22 @@ export default function App() {
                   href="#about"
                   onClick={() => setActiveSection("about")}
                   aria-current={activeSection === "about" ? "true" : undefined}
-                  className={`relative py-1 text-[16px] md:text-[17px] transition-colors select-none ${
+                  className={`relative py-1 text-[16px] md:text-[17px] transition-colors duration-250 select-none ${
                     activeSection === "about"
-                      ? "text-[#4E6B43] font-extrabold"
-                      : "text-[#1F2B20] font-bold hover:text-[#4E6B43]"
+                      ? navIsSolid
+                        ? "text-[#6F8F5F] font-extrabold"
+                        : "text-[#1F2B20] font-extrabold"
+                      : navIsSolid
+                        ? "text-[#1F2B20] font-bold hover:text-[#6F8F5F]"
+                        : "text-[#1F2B20] font-bold hover:opacity-75"
                   }`}
                 >
                   <span>About</span>
                   {activeSection === "about" && (
                     <span
-                      className="absolute -bottom-1.5 left-0 right-0 h-[3px] bg-[#4E6B43] rounded-full"
+                      className={`absolute -bottom-1.5 left-0 right-0 h-[3px] rounded-full transition-colors duration-250 ${
+                        navIsSolid ? "bg-[#6F8F5F]" : "bg-[#1F2B20]"
+                      }`}
                       aria-hidden="true"
                     />
                   )}
@@ -1548,16 +2248,22 @@ export default function App() {
                   href="#info"
                   onClick={() => setActiveSection("info")}
                   aria-current={activeSection === "info" ? "true" : undefined}
-                  className={`relative py-1 text-[16px] md:text-[17px] transition-colors select-none ${
+                  className={`relative py-1 text-[16px] md:text-[17px] transition-colors duration-250 select-none ${
                     activeSection === "info"
-                      ? "text-[#4E6B43] font-extrabold"
-                      : "text-[#1F2B20] font-bold hover:text-[#4E6B43]"
+                      ? navIsSolid
+                        ? "text-[#6F8F5F] font-extrabold"
+                        : "text-[#1F2B20] font-extrabold"
+                      : navIsSolid
+                        ? "text-[#1F2B20] font-bold hover:text-[#6F8F5F]"
+                        : "text-[#1F2B20] font-bold hover:opacity-75"
                   }`}
                 >
                   <span>Info</span>
                   {activeSection === "info" && (
                     <span
-                      className="absolute -bottom-1.5 left-0 right-0 h-[3px] bg-[#4E6B43] rounded-full"
+                      className={`absolute -bottom-1.5 left-0 right-0 h-[3px] rounded-full transition-colors duration-250 ${
+                        navIsSolid ? "bg-[#6F8F5F]" : "bg-[#1F2B20]"
+                      }`}
                       aria-hidden="true"
                     />
                   )}
@@ -1567,31 +2273,39 @@ export default function App() {
                   href="#order"
                   onClick={() => setActiveSection("order")}
                   aria-current={activeSection === "order" ? "true" : undefined}
-                  className={`relative py-1 text-[16px] md:text-[17px] transition-colors select-none ${
+                  className={`relative py-1 text-[16px] md:text-[17px] transition-colors duration-250 select-none ${
                     activeSection === "order"
-                      ? "text-[#4E6B43] font-extrabold"
-                      : "text-[#1F2B20] font-bold hover:text-[#4E6B43]"
+                      ? navIsSolid
+                        ? "text-[#6F8F5F] font-extrabold"
+                        : "text-[#1F2B20] font-extrabold"
+                      : navIsSolid
+                        ? "text-[#1F2B20] font-bold hover:text-[#6F8F5F]"
+                        : "text-[#1F2B20] font-bold hover:opacity-75"
                   }`}
                 >
                   <span>Order</span>
                   {activeSection === "order" && (
                     <span
-                      className="absolute -bottom-1.5 left-0 right-0 h-[3px] bg-[#4E6B43] rounded-full"
+                      className={`absolute -bottom-1.5 left-0 right-0 h-[3px] rounded-full transition-colors duration-250 ${
+                        navIsSolid ? "bg-[#6F8F5F]" : "bg-[#1F2B20]"
+                      }`}
                       aria-hidden="true"
                     />
                   )}
                 </a>
 
-                <div className="flex items-center pl-3 border-l border-[#D3DFC8]">
+                <div className={`flex items-center pl-3 border-l transition-colors duration-250 ${
+                  navIsSolid ? "border-[#1F2B20]/10" : "border-transparent"
+                }`}>
                   <button
                     type="button"
                     onClick={() => setCartOpen(true)}
                     aria-label={totalBasketItems > 0 ? `Shopping cart, ${totalBasketItems} items` : "Shopping cart"}
-                    className="relative w-9 h-9 rounded-full flex items-center justify-center text-[#1F2B20] hover:text-[#4E6B43] hover:bg-[#D3DFC8]/60 transition-colors cursor-pointer"
+                    className="relative w-9 h-9 rounded-full flex items-center justify-center text-[#1F2B20] hover:text-[#6F8F5F] hover:bg-[#EEE7D6]/60 transition-colors duration-250 cursor-pointer"
                   >
                     <ShoppingCart className="w-5 h-5 stroke-[2]" />
                     {totalBasketItems > 0 && (
-                      <span className="absolute -top-1 -right-1 bg-[#4E6B43] text-[#FDFCF6] text-[10px] font-black min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center shadow-xs leading-none">
+                      <span className="absolute -top-1 -right-1 bg-[#6F8F5F] text-[#FFFFFF] text-[10px] font-black min-w-[17px] h-[17px] px-1 rounded-full flex items-center justify-center shadow-xs leading-none">
                         {totalBasketItems}
                       </span>
                     )}
@@ -1602,9 +2316,9 @@ export default function App() {
             </div>
           </nav>
 
-          {/* Mobile Dropdown Menu (on phones when menu is open) */}
+          {/* Mobile Dropdown Menu (on phones when menu is open: opens from the right) */}
           {mobileMenuOpen && (
-            <div className="md:hidden w-full sm:max-w-xs self-start origin-top-left bg-[#FFFFFF] border border-[#1F2B20]/10 rounded-2xl py-3 px-4 shadow-lg flex flex-col gap-1 mt-2 animate-in fade-in slide-in-from-top-2 duration-150">
+            <div className="md:hidden w-full sm:max-w-xs self-end origin-top-right bg-[#FFFFFF] border border-[#1F2B20]/10 rounded-2xl py-3 px-4 shadow-[0_10px_25px_rgba(60,45,20,0.10)] flex flex-col gap-1 mt-2 animate-in fade-in slide-in-from-right-2 duration-200">
               <a
                 href="#shop"
                 onClick={() => {
@@ -1614,15 +2328,15 @@ export default function App() {
                 aria-current={activeSection === "shop" ? "true" : undefined}
                 className={`relative py-2 px-3 text-base select-none transition-colors rounded-xl ${
                   activeSection === "shop"
-                    ? "text-[#4E6B43] font-extrabold bg-[#D3DFC8]/35"
-                    : "text-[#1F2B20] font-bold hover:bg-[#FFF1B5]/60"
+                    ? "text-[#6F8F5F] font-extrabold bg-[#EEE7D6]/60"
+                    : "text-[#1F2B20] font-bold hover:bg-[#EEE7D6]/40"
                 }`}
               >
                 <span className="relative inline-block">
                   Shop
                   {activeSection === "shop" && (
                     <span
-                      className="absolute -bottom-0.5 left-0 right-0 h-[3px] bg-[#4E6B43] rounded-full"
+                      className="absolute -bottom-0.5 left-0 right-0 h-[3px] bg-[#6F8F5F] rounded-full"
                       aria-hidden="true"
                     />
                   )}
@@ -1638,15 +2352,15 @@ export default function App() {
                 aria-current={activeSection === "about" ? "true" : undefined}
                 className={`relative py-2 px-3 text-base select-none transition-colors rounded-xl ${
                   activeSection === "about"
-                    ? "text-[#4E6B43] font-extrabold bg-[#D3DFC8]/35"
-                    : "text-[#1F2B20] font-bold hover:bg-[#FFF1B5]/60"
+                    ? "text-[#6F8F5F] font-extrabold bg-[#EEE7D6]/60"
+                    : "text-[#1F2B20] font-bold hover:bg-[#EEE7D6]/40"
                 }`}
               >
                 <span className="relative inline-block">
                   About
                   {activeSection === "about" && (
                     <span
-                      className="absolute -bottom-0.5 left-0 right-0 h-[3px] bg-[#4E6B43] rounded-full"
+                      className="absolute -bottom-0.5 left-0 right-0 h-[3px] bg-[#6F8F5F] rounded-full"
                       aria-hidden="true"
                     />
                   )}
@@ -1662,15 +2376,15 @@ export default function App() {
                 aria-current={activeSection === "info" ? "true" : undefined}
                 className={`relative py-2 px-3 text-base select-none transition-colors rounded-xl ${
                   activeSection === "info"
-                    ? "text-[#4E6B43] font-extrabold bg-[#D3DFC8]/35"
-                    : "text-[#1F2B20] font-bold hover:bg-[#FFF1B5]/60"
+                    ? "text-[#6F8F5F] font-extrabold bg-[#EEE7D6]/60"
+                    : "text-[#1F2B20] font-bold hover:bg-[#EEE7D6]/40"
                 }`}
               >
                 <span className="relative inline-block">
                   Info
                   {activeSection === "info" && (
                     <span
-                      className="absolute -bottom-0.5 left-0 right-0 h-[3px] bg-[#4E6B43] rounded-full"
+                      className="absolute -bottom-0.5 left-0 right-0 h-[3px] bg-[#6F8F5F] rounded-full"
                       aria-hidden="true"
                     />
                   )}
@@ -1686,15 +2400,15 @@ export default function App() {
                 aria-current={activeSection === "order" ? "true" : undefined}
                 className={`relative py-2 px-3 text-base select-none transition-colors rounded-xl ${
                   activeSection === "order"
-                    ? "text-[#4E6B43] font-extrabold bg-[#D3DFC8]/35"
-                    : "text-[#1F2B20] font-bold hover:bg-[#FFF1B5]/60"
+                    ? "text-[#6F8F5F] font-extrabold bg-[#EEE7D6]/60"
+                    : "text-[#1F2B20] font-bold hover:bg-[#EEE7D6]/40"
                 }`}
               >
                 <span className="relative inline-block">
                   Order
                   {activeSection === "order" && (
                     <span
-                      className="absolute -bottom-0.5 left-0 right-0 h-[3px] bg-[#4E6B43] rounded-full"
+                      className="absolute -bottom-0.5 left-0 right-0 h-[3px] bg-[#6F8F5F] rounded-full"
                       aria-hidden="true"
                     />
                   )}
@@ -1707,49 +2421,73 @@ export default function App() {
 
       {/* ---------------------------------------------------------------------
           FULL-WIDTH HERO FEATURED IMAGE
-          - Span full width edge to edge (w-full, no horizontal scroll)
-          - Square corners (rounded-none)
-          - Attached directly under the nav bar
-          - Height: ~70vh desktop (between 420px and 720px), ~60vh phones (min 380px)
-          - Slow hero zoom: image slowly zooms from 100% to 105% over 12s on page load, once
-          - "Make Order" button centered inside, about 28px above bottom edge (stays still)
+          - Starts at the very top of the page directly behind the nav (no cream strip)
+          - Top padding: nav height plus 16px (pt-[88px] sm:pt-[92px] md:pt-[100px])
+          - Bottom padding: about 96px (pb-[96px])
+          - Whole featured image without cropping: w-full, h-auto, object-fit: contain, centered
+            Desktop: max-h-[calc(100dvh-220px)] min-h-[260px]
+            Phones: full width with natural height
+          - Background color detected from edge pixels (fallback #D5E2D4)
+          - No slow zoom
+          - "Order Now" button sits centered just below the image inside bottom padding
+          - Edit mode: "Change" & "Remove" at bottom-left of hero
           --------------------------------------------------------------------- */}
       <section
         aria-label="Hero Showcase"
-        className="relative w-full h-[60vh] min-h-[380px] md:h-[70vh] md:min-h-[420px] md:max-h-[720px] bg-[#D3DFC8] overflow-hidden -mt-2 md:-mt-3 group rounded-none"
+        style={{ backgroundColor: "#EFEFEA" }}
+        className="relative w-full -mt-[68px] sm:-mt-[72px] md:-mt-[80px] pt-[76px] sm:pt-[80px] md:pt-[88px] pb-[56px] overflow-hidden group rounded-none flex flex-col items-center justify-center"
       >
         {heroImage ? (
-          <>
-            <img
-              src={heroImage}
-              alt="Featured crochet showcase"
-              className="w-full h-full object-cover will-change-transform"
-              style={{
-                transform: heroZoomed ? "scale(1.05)" : "scale(1)",
-                transition: "transform 12000ms cubic-bezier(0.25, 1, 0.5, 1)",
-              }}
-            />
-            {editMode && (
-              <div className="absolute top-5 right-5 z-20 flex items-center gap-2 transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100 [@media(hover:none)]:!opacity-100">
-                <label className="bg-[#FDFCF6]/95 hover:bg-[#FFF1B5] text-[#1F2B20] text-xs font-bold px-3.5 py-1.5 rounded-full cursor-pointer shadow-md transition-colors">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        handleImageUpload("hero_featured", e.target.files[0]);
-                      }
-                    }}
-                  />
-                  <span>Change</span>
-                </label>
-                <ConfirmRemoveButton onConfirm={() => handleImageRemove("hero_featured")} />
-              </div>
-            )}
-          </>
+          <div className="w-full relative">
+            {/* --- PHONE (<= 768px: md:hidden) --- */}
+            {/* Square container (aspect-ratio 1 / 1) at width 100%, object-fit: cover, object-position: center */}
+            <div className="md:hidden w-full aspect-square relative overflow-hidden flex items-center justify-center">
+              <img
+                src={heroImage}
+                alt="Featured crochet showcase"
+                className="w-full h-full object-cover object-center block"
+                style={{
+                  WebkitMaskImage: "linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
+                  maskImage: "linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
+                }}
+              />
+            </div>
+
+            {/* --- DESKTOP (> 768px: hidden md:flex) --- */}
+            <div className="hidden md:flex w-full relative overflow-hidden items-center justify-center">
+              {isNarrow ? (
+                /* Narrow fallback (< 1.8:1): centered at natural ratio, height max 700px / calc(100dvh-220px), 90px side fade */
+                <img
+                  src={heroImage}
+                  alt="Featured crochet showcase"
+                  className="w-auto max-w-full max-h-[min(calc(100dvh-220px),700px)] object-contain object-center block"
+                  style={{
+                    aspectRatio: heroAspectRatio,
+                    WebkitMaskImage:
+                      "linear-gradient(to right, transparent 0px, black 90px, black calc(100% - 90px), transparent 100%), linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
+                    maskImage:
+                      "linear-gradient(to right, transparent 0px, black 90px, black calc(100% - 90px), transparent 100%), linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
+                    WebkitMaskComposite: "destination-in",
+                    maskComposite: "intersect",
+                  }}
+                />
+              ) : (
+                /* Full-width banner: width 100%, natural aspect ratio, object-fit: cover, max-height calc(100dvh-180px), yarn reaches edges */
+                <img
+                  src={heroImage}
+                  alt="Featured crochet showcase"
+                  className="w-full max-h-[calc(100dvh-180px)] object-cover object-center block"
+                  style={{
+                    aspectRatio: heroAspectRatio,
+                    WebkitMaskImage: "linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
+                    maskImage: "linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
+                  }}
+                />
+              )}
+            </div>
+          </div>
         ) : editMode ? (
-          <div className="w-full h-full flex items-center justify-center bg-[#C5D4B8] border-2 border-dashed border-[#4E6B43]/50">
+          <div className="w-full max-w-[800px] h-[360px] md:h-[calc(100dvh-220px)] md:min-h-[260px] flex items-center justify-center bg-[#E9E3D3] border-2 border-dashed border-[#6F8F5F]/50 mx-auto rounded-3xl">
             <label className="flex flex-col items-center justify-center gap-3.5 cursor-pointer group/upload p-8 rounded-3xl">
               <input
                 type="file"
@@ -1761,7 +2499,7 @@ export default function App() {
                   }
                 }}
               />
-              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#FDFCF6] shadow-sm flex items-center justify-center text-[#4E6B43] group-hover/upload:bg-[#FFF1B5] transition-colors">
+              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#FFFFFF] shadow-sm flex items-center justify-center text-[#6F8F5F] group-hover/upload:bg-[#EEE7D6] transition-colors">
                 <Plus className="w-8 h-8 sm:w-10 sm:h-10 stroke-[2.5]" />
               </div>
               <span className="font-heading text-lg sm:text-xl text-[#1F2B20] tracking-[0.02em]">
@@ -1770,20 +2508,44 @@ export default function App() {
             </label>
           </div>
         ) : (
-          /* When edit mode is OFF and no photo: placeholder slot with tint #C5D4B8 and dashed outline */
-          <div className="w-full h-full bg-[#C5D4B8] border-2 border-dashed border-[#4E6B43]/50" />
+          <div className="w-full max-w-[800px] h-[360px] md:h-[calc(100dvh-220px)] md:min-h-[260px] bg-[#E9E3D3] border-2 border-dashed border-[#6F8F5F]/50 mx-auto rounded-3xl" />
         )}
 
-        {/* "Make Order" button: fully inside the card, centered, 28px above bottom edge */}
-        <div className="absolute bottom-7 left-1/2 -translate-x-1/2 z-20">
+        {/* "Order Now" button: 40px space above (mt-10) and 56px space below (from hero's pb-[56px]) */}
+        <div className="mt-10 flex justify-center z-20">
           <a
             href="#order"
             onClick={() => setActiveSection("order")}
-            className="inline-flex items-center justify-center bg-[#4E6B43] hover:bg-[#3F5A36] text-[#FDFCF6] font-bold text-base md:text-lg px-8 sm:px-10 py-3.5 sm:py-4 rounded-full shadow-[0_10px_25px_rgba(31,43,32,0.14)] transition-colors whitespace-nowrap"
+            aria-label="Order Now"
+            className={`inline-flex items-center justify-center font-bold text-base md:text-lg px-8 sm:px-10 py-3.5 sm:py-4 rounded-full transition-all duration-250 ease-out whitespace-nowrap cursor-pointer ${
+              isScrolled
+                ? "bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] border-2 border-transparent shadow-[0_10px_25px_rgba(60,45,20,0.12)] backdrop-blur-none"
+                : "bg-white/12 backdrop-blur-[6px] border-2 border-[#1F2B20] text-[#1F2B20] hover:bg-[#1F2B20] hover:text-[#FFFFFF] shadow-none"
+            }`}
           >
-            Make Order
+            Order Now
           </a>
         </div>
+
+        {/* Edit mode: Change and Remove buttons at bottom-left of hero */}
+        {editMode && heroImage && (
+          <div className="absolute bottom-5 left-5 z-20 flex items-center gap-2">
+            <label className="bg-[#FFFFFF] hover:bg-[#EEE7D6] text-[#1F2B20] text-xs font-bold px-3.5 py-1.5 rounded-full cursor-pointer shadow-md transition-colors">
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    handleImageUpload("hero_featured", e.target.files[0]);
+                  }
+                }}
+              />
+              <span>Change</span>
+            </label>
+            <ConfirmRemoveButton onConfirm={() => handleImageRemove("hero_featured")} />
+          </div>
+        )}
       </section>
 
       {/* Main Content Container */}
@@ -1815,17 +2577,14 @@ export default function App() {
             </p>
           </div>
 
-          {/* ROW 1: IN STOCK */}
+          {/* ROW 1: RECENT CREATIONS */}
           <div className="flex flex-col gap-4">
             <div className="flex items-center justify-between px-2">
               <div className="flex items-center gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#4E6B43]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#6F8F5F]" />
                 <h3 className="font-heading text-2xl text-[#1F2B20] tracking-[0.02em]">
-                  In Stock
+                  Recent Creations
                 </h3>
-                <span className="text-xs font-bold uppercase tracking-wider text-[#4E6B43] bg-[#D3DFC8] px-2.5 py-0.5 rounded-full">
-                  Ready to Dispatch
-                </span>
               </div>
 
               {/* Round arrow sideways scroll buttons (desktop only: hidden on phones) */}
@@ -1833,16 +2592,16 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => scrollRow(inStockScrollRef, "left")}
-                  aria-label="Scroll left in stock pieces"
-                  className="w-10 h-10 rounded-full bg-[#FDFCF6] hover:bg-[#FFF1B5] border border-[#D3DFC8] flex items-center justify-center text-[#1F2B20] shadow-sm transition-colors cursor-pointer"
+                  aria-label="Scroll left recent creations"
+                  className="w-10 h-10 rounded-full bg-[#FFFFFF] hover:bg-[#EEE7D6] flex items-center justify-center text-[#1F2B20] shadow-[0_4px_12px_rgba(60,45,20,0.08)] transition-colors cursor-pointer"
                 >
                   <ChevronLeft className="w-5 h-5" />
                 </button>
                 <button
                   type="button"
                   onClick={() => scrollRow(inStockScrollRef, "right")}
-                  aria-label="Scroll right in stock pieces"
-                  className="w-10 h-10 rounded-full bg-[#FDFCF6] hover:bg-[#FFF1B5] border border-[#D3DFC8] flex items-center justify-center text-[#1F2B20] shadow-sm transition-colors cursor-pointer"
+                  aria-label="Scroll right recent creations"
+                  className="w-10 h-10 rounded-full bg-[#FFFFFF] hover:bg-[#EEE7D6] flex items-center justify-center text-[#1F2B20] shadow-[0_4px_12px_rgba(60,45,20,0.08)] transition-colors cursor-pointer"
                 >
                   <ChevronRight className="w-5 h-5" />
                 </button>
@@ -1864,13 +2623,25 @@ export default function App() {
                 return (
                   <ScrollReveal key={product.id} staggerIndex={idx} className="shrink-0">
                     <article
-                      className="w-[285px] bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between shadow-[0_8px_24px_rgba(31,43,32,0.12)] border border-[#D3DFC8] h-full"
+                      className="w-[285px] bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full relative"
                     >
+                      {/* Delete card button (top-right corner in edit mode) */}
+                      {editMode && (
+                        <div className="absolute top-2.5 right-2.5 z-20">
+                          <DeleteCardButton
+                            onDelete={() => handleDeleteCard(product.id)}
+                            disabled={inStockProducts.length <= 1}
+                          />
+                        </div>
+                      )}
+
                       <div>
                         <ProductImageArea
                           product={product}
                           photoUrl={photoUrl}
                           editMode={editMode}
+                          fitMode={cardFit[product.id] || "fill"}
+                          onSetFit={(fit) => handleSetCardFit(product.id, fit)}
                           onUpload={(e) => {
                             if (e.target.files?.[0]) {
                               handleImageUpload(product.id, e.target.files[0]);
@@ -1886,8 +2657,8 @@ export default function App() {
                           onKeyDown={editMode ? handleKeyDownNoEnter : undefined}
                           onBlur={editMode ? (e) => handleCardTextChange(product.id, "label", e.currentTarget.textContent || "") : undefined}
                           title={editMode ? "Click to edit label" : undefined}
-                          className={`text-[13px] font-bold uppercase tracking-wider text-[#4E6B43] mb-1 outline-none rounded px-1 -mx-1 transition-colors ${
-                            editMode ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                          className={`text-[13px] font-bold uppercase tracking-wider text-[#6F8F5F] mb-1 outline-none rounded px-1 -mx-1 transition-colors ${
+                            editMode ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                           }`}
                         >
                           {label}
@@ -1901,7 +2672,7 @@ export default function App() {
                           onBlur={editMode ? (e) => handleCardTextChange(product.id, "name", e.currentTarget.textContent || "") : undefined}
                           title={editMode ? "Click to edit name" : undefined}
                           className={`font-heading text-xl text-[#1F2B20] leading-snug mb-1.5 tracking-[0.02em] outline-none rounded px-1 -mx-1 transition-colors ${
-                            editMode ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                            editMode ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                           }`}
                         >
                           {name}
@@ -1914,14 +2685,14 @@ export default function App() {
                           onBlur={editMode ? (e) => handleCardTextChange(product.id, "description", e.currentTarget.textContent || "") : undefined}
                           title={editMode ? "Click to edit description" : undefined}
                           className={`text-[#1F2B20]/75 text-sm line-clamp-2 mb-3 outline-none rounded px-1 -mx-1 transition-colors ${
-                            editMode ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                            editMode ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                           }`}
                         >
                           {description}
                         </p>
                       </div>
 
-                      <div className="flex items-center justify-between pt-3 border-t border-[#D3DFC8]/80 mt-2">
+                      <div className="flex items-center justify-between pt-3 border-t border-[rgba(60,45,20,0.08)] mt-2">
                         {/* Editable Price */}
                         <span
                           contentEditable={editMode}
@@ -1930,7 +2701,7 @@ export default function App() {
                           onBlur={editMode ? (e) => handleCardTextChange(product.id, "price", e.currentTarget.textContent || "") : undefined}
                           title={editMode ? "Click to edit price" : undefined}
                           className={`text-[#E0764A] font-bold text-lg outline-none rounded px-1 -mx-1 transition-colors ${
-                            editMode ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                            editMode ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                           }`}
                         >
                           {price}
@@ -1938,7 +2709,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => handleSelectProductForOrder(product)}
-                          className="bg-[#4E6B43] hover:bg-[#3F5A36] text-[#FDFCF6] text-xs font-bold px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
+                          className="bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] text-xs font-bold px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
                         >
                           Order this
                         </button>
@@ -1947,6 +2718,28 @@ export default function App() {
                   </ScrollReveal>
                 );
               })}
+
+              {/* In edit mode, show a dashed "+ Add card" tile at the end of the row */}
+              {editMode && inStockProducts.length < 12 && (
+                <div className="shrink-0 flex items-stretch">
+                  <button
+                    type="button"
+                    onClick={() => handleAddCard("in-stock")}
+                    className="w-[285px] min-h-[460px] h-full border-2 border-dashed border-[#6F8F5F]/50 hover:border-[#6F8F5F] bg-[#E9E3D3]/40 hover:bg-[#E9E3D3]/70 rounded-[20px] p-6 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer group"
+                    aria-label="Add card to Recent Creations"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-[#FFFFFF] group-hover:bg-[#EEE7D6] flex items-center justify-center text-[#6F8F5F] shadow-xs transition-colors">
+                      <Plus className="w-6 h-6 stroke-[2.5]" />
+                    </div>
+                    <span className="font-heading text-lg text-[#1F2B20] tracking-[0.02em]">
+                      + Add card
+                    </span>
+                    <span className="text-xs text-[#1F2B20]/60">
+                      ({inStockProducts.length}/12)
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Mobile Stacked Card Deck (<= 768px only) */}
@@ -1955,11 +2748,15 @@ export default function App() {
                 products={inStockProducts}
                 savedImages={savedImages}
                 cardEdits={cardEdits}
+                cardFit={cardFit}
                 editMode={editMode}
                 onSelectProductForOrder={handleSelectProductForOrder}
                 onImageUpload={handleImageUpload}
                 onImageRemove={handleImageRemove}
                 onCardTextChange={handleCardTextChange}
+                onSetCardFit={handleSetCardFit}
+                onDeleteCard={handleDeleteCard}
+                onAddCard={() => handleAddCard("in-stock")}
                 handleKeyDownNoEnter={handleKeyDownNoEnter}
                 getProductField={getProductField}
               />
@@ -1974,7 +2771,7 @@ export default function App() {
                 <h3 className="font-heading text-2xl text-[#1F2B20] tracking-[0.02em]">
                   Past Creations
                 </h3>
-                <span className="text-xs font-bold uppercase tracking-wider text-[#1F2B20]/70 bg-[#D3DFC8] px-2.5 py-0.5 rounded-full">
+                <span className="text-xs font-bold uppercase tracking-wider text-[#1F2B20] bg-[#F7B8CB] px-2.5 py-0.5 rounded-full">
                   Archive &amp; Inspo
                 </span>
               </div>
@@ -1985,7 +2782,7 @@ export default function App() {
                   type="button"
                   onClick={() => scrollRow(pastCreationsScrollRef, "left")}
                   aria-label="Scroll left past creations"
-                  className="w-10 h-10 rounded-full bg-[#FDFCF6] hover:bg-[#FFF1B5] border border-[#D3DFC8] flex items-center justify-center text-[#1F2B20] shadow-sm transition-colors cursor-pointer"
+                  className="w-10 h-10 rounded-full bg-[#FFFFFF] hover:bg-[#EEE7D6] flex items-center justify-center text-[#1F2B20] shadow-[0_4px_12px_rgba(60,45,20,0.08)] transition-colors cursor-pointer"
                 >
                   <ChevronLeft className="w-5 h-5" />
                 </button>
@@ -1993,7 +2790,7 @@ export default function App() {
                   type="button"
                   onClick={() => scrollRow(pastCreationsScrollRef, "right")}
                   aria-label="Scroll right past creations"
-                  className="w-10 h-10 rounded-full bg-[#FDFCF6] hover:bg-[#FFF1B5] border border-[#D3DFC8] flex items-center justify-center text-[#1F2B20] shadow-sm transition-colors cursor-pointer"
+                  className="w-10 h-10 rounded-full bg-[#FFFFFF] hover:bg-[#EEE7D6] flex items-center justify-center text-[#1F2B20] shadow-[0_4px_12px_rgba(60,45,20,0.08)] transition-colors cursor-pointer"
                 >
                   <ChevronRight className="w-5 h-5" />
                 </button>
@@ -2015,13 +2812,25 @@ export default function App() {
                 return (
                   <ScrollReveal key={product.id} staggerIndex={idx} className="shrink-0">
                     <article
-                      className="w-[285px] bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between shadow-[0_8px_24px_rgba(31,43,32,0.12)] border border-[#D3DFC8] h-full relative"
+                      className="w-[285px] bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full relative"
                     >
+                      {/* Delete card button (top-right corner in edit mode) */}
+                      {editMode && (
+                        <div className="absolute top-2.5 right-2.5 z-20">
+                          <DeleteCardButton
+                            onDelete={() => handleDeleteCard(product.id)}
+                            disabled={pastCreationsProducts.length <= 1}
+                          />
+                        </div>
+                      )}
+
                       <div>
                         <ProductImageArea
                           product={product}
                           photoUrl={photoUrl}
                           editMode={editMode}
+                          fitMode={cardFit[product.id] || "fill"}
+                          onSetFit={(fit) => handleSetCardFit(product.id, fit)}
                           onUpload={(e) => {
                             if (e.target.files?.[0]) {
                               handleImageUpload(product.id, e.target.files[0]);
@@ -2037,8 +2846,8 @@ export default function App() {
                           onKeyDown={editMode ? handleKeyDownNoEnter : undefined}
                           onBlur={editMode ? (e) => handleCardTextChange(product.id, "label", e.currentTarget.textContent || "") : undefined}
                           title={editMode ? "Click to edit label" : undefined}
-                          className={`text-[13px] font-bold uppercase tracking-wider text-[#4E6B43] mb-1 outline-none rounded px-1 -mx-1 transition-colors ${
-                            editMode ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                          className={`text-[13px] font-bold uppercase tracking-wider text-[#6F8F5F] mb-1 outline-none rounded px-1 -mx-1 transition-colors ${
+                            editMode ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                           }`}
                         >
                           {label}
@@ -2052,7 +2861,7 @@ export default function App() {
                           onBlur={editMode ? (e) => handleCardTextChange(product.id, "name", e.currentTarget.textContent || "") : undefined}
                           title={editMode ? "Click to edit name" : undefined}
                           className={`font-heading text-xl text-[#1F2B20] leading-snug mb-1.5 tracking-[0.02em] outline-none rounded px-1 -mx-1 transition-colors ${
-                            editMode ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                            editMode ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                           }`}
                         >
                           {name}
@@ -2065,14 +2874,14 @@ export default function App() {
                           onBlur={editMode ? (e) => handleCardTextChange(product.id, "description", e.currentTarget.textContent || "") : undefined}
                           title={editMode ? "Click to edit description" : undefined}
                           className={`text-[#1F2B20]/75 text-sm line-clamp-2 mb-3 outline-none rounded px-1 -mx-1 transition-colors ${
-                            editMode ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                            editMode ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                           }`}
                         >
                           {description}
                         </p>
                       </div>
 
-                      <div className="flex items-center justify-between pt-3 border-t border-[#D3DFC8]/80 mt-2">
+                      <div className="flex items-center justify-between pt-3 border-t border-[rgba(60,45,20,0.08)] mt-2">
                         {/* Editable Price */}
                         <span
                           contentEditable={editMode}
@@ -2081,19 +2890,76 @@ export default function App() {
                           onBlur={editMode ? (e) => handleCardTextChange(product.id, "price", e.currentTarget.textContent || "") : undefined}
                           title={editMode ? "Click to edit price" : undefined}
                           className={`text-[#E0764A] font-bold text-lg outline-none rounded px-1 -mx-1 transition-colors ${
-                            editMode ? "hover:bg-[#D3DFC8]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
+                            editMode ? "hover:bg-[#EEE7D6]/50 focus:bg-[#FFF1B5]/40 cursor-text" : "cursor-default"
                           }`}
                         >
                           {price}
                         </span>
-                        <span className="bg-[#FFF1B5] text-[#1F2B20] text-xs font-black px-3.5 py-1.5 rounded-full uppercase tracking-wider shadow-xs">
-                          Sold
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {editMode ? (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCardStatus(product.id)}
+                              className={`text-xs font-black px-3 py-1.5 rounded-full uppercase tracking-wider shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors ${
+                                (cardStatus[product.id] || "sold") === "available"
+                                  ? "bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF]"
+                                  : "bg-[#FFF1B5] hover:bg-[#FFF1B5]/85 text-[#1F2B20]"
+                              }`}
+                              title="Tap to switch status between Sold and Available"
+                              aria-label={`Status: ${(cardStatus[product.id] || "sold") === "available" ? "Available" : "Sold"}. Tap to switch.`}
+                            >
+                              <span>{(cardStatus[product.id] || "sold") === "available" ? "Available" : "Sold"}</span>
+                              <RefreshCw className="w-3 h-3 shrink-0" />
+                            </button>
+                          ) : (
+                            <span
+                              className={`text-xs font-black px-3.5 py-1.5 rounded-full uppercase tracking-wider shadow-xs ${
+                                (cardStatus[product.id] || "sold") === "available"
+                                  ? "bg-[#6F8F5F] text-[#FFFFFF]"
+                                  : "bg-[#FFF1B5] text-[#1F2B20]"
+                              }`}
+                            >
+                              {(cardStatus[product.id] || "sold") === "available" ? "Available" : "Sold"}
+                            </span>
+                          )}
+
+                          {(cardStatus[product.id] || "sold") === "available" && (
+                            <button
+                              type="button"
+                              onClick={() => handleSelectProductForOrder(product)}
+                              className="bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] text-xs font-bold px-3.5 py-1.5 rounded-full transition-colors cursor-pointer shadow-xs whitespace-nowrap"
+                            >
+                              Order this
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </article>
                   </ScrollReveal>
                 );
               })}
+
+              {/* In edit mode, show a dashed "+ Add card" tile at the end of the row */}
+              {editMode && pastCreationsProducts.length < 12 && (
+                <div className="shrink-0 flex items-stretch">
+                  <button
+                    type="button"
+                    onClick={() => handleAddCard("past-creation")}
+                    className="w-[285px] min-h-[460px] h-full border-2 border-dashed border-[#6F8F5F]/50 hover:border-[#6F8F5F] bg-[#E9E3D3]/40 hover:bg-[#E9E3D3]/70 rounded-[20px] p-6 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer group"
+                    aria-label="Add card to Past Creations"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-[#FFFFFF] group-hover:bg-[#EEE7D6] flex items-center justify-center text-[#6F8F5F] shadow-xs transition-colors">
+                      <Plus className="w-6 h-6 stroke-[2.5]" />
+                    </div>
+                    <span className="font-heading text-lg text-[#1F2B20] tracking-[0.02em]">
+                      + Add card
+                    </span>
+                    <span className="text-xs text-[#1F2B20]/60">
+                      ({pastCreationsProducts.length}/12)
+                    </span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Mobile Stacked Card Deck (<= 768px only) */}
@@ -2103,10 +2969,17 @@ export default function App() {
                 isPastCreations
                 savedImages={savedImages}
                 cardEdits={cardEdits}
+                cardFit={cardFit}
+                cardStatus={cardStatus}
                 editMode={editMode}
+                onSelectProductForOrder={handleSelectProductForOrder}
                 onImageUpload={handleImageUpload}
                 onImageRemove={handleImageRemove}
                 onCardTextChange={handleCardTextChange}
+                onSetCardFit={handleSetCardFit}
+                onToggleStatus={handleToggleCardStatus}
+                onDeleteCard={handleDeleteCard}
+                onAddCard={() => handleAddCard("past-creation")}
                 handleKeyDownNoEnter={handleKeyDownNoEnter}
                 getProductField={getProductField}
               />
@@ -2119,11 +2992,11 @@ export default function App() {
             --------------------------------------------------------------------- */}
         <section id="about" className="w-full scroll-mt-24 md:scroll-mt-28">
           <ScrollReveal className="w-full">
-            <div className="bg-[#FDFCF6] rounded-[32px] p-8 md:p-12 shadow-[0_8px_30px_rgba(31,43,32,0.12)] border border-[#D3DFC8]">
+            <div className="w-full">
               {/* Top row: Display heading and FAQ button */}
               <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6 mb-8">
                 <div className="max-w-3xl">
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#4E6B43] mb-3">
+                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
                     About Our Studio
                   </div>
                   <MicroscopeHeading
@@ -2138,9 +3011,9 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setFaqOpen(true)}
-                    className="inline-flex items-center gap-2 bg-[#D3DFC8] hover:bg-[#FFF1B5] text-[#1F2B20] font-bold text-sm px-5 py-2.5 rounded-full transition-colors cursor-pointer shadow-sm"
+                    className="inline-flex items-center gap-2 bg-[#EEE7D6] hover:bg-[#FDFCF6] text-[#1F2B20] font-bold text-sm px-5 py-2.5 rounded-full shadow-[0_4px_12px_rgba(60,45,20,0.08)] transition-colors cursor-pointer"
                   >
-                    <HelpCircle className="w-4 h-4 text-[#4E6B43]" />
+                    <HelpCircle className="w-4 h-4 text-[#6F8F5F]" />
                     <span>FAQ</span>
                   </button>
                 </div>
@@ -2156,10 +3029,10 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Pickup Info Strip */}
-              <div className="bg-[#D3DFC8] rounded-[20px] px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+              {/* Pickup Info Card */}
+              <div className="bg-[#FDFCF6] rounded-[20px] px-6 py-4 shadow-[0_8px_24px_rgba(60,45,20,0.10)] flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-[#FDFCF6] flex items-center justify-center text-[#4E6B43] shrink-0 shadow-xs">
+                  <div className="w-9 h-9 rounded-full bg-[#EEE7D6] flex items-center justify-center text-[#6F8F5F] shrink-0 shadow-xs">
                     <MapPin className="w-4 h-4" />
                   </div>
                   <div>
@@ -2181,7 +3054,7 @@ export default function App() {
             --------------------------------------------------------------------- */}
         <section id="info" className="w-full scroll-mt-24 md:scroll-mt-28">
           <div className="text-center max-w-2xl mx-auto mb-10">
-            <div className="text-[13px] font-bold tracking-widest uppercase text-[#4E6B43] mb-2">
+            <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-2">
               The Process
             </div>
             <MicroscopeHeading
@@ -2197,9 +3070,9 @@ export default function App() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {/* STEP 1 */}
             <ScrollReveal staggerIndex={0}>
-              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(31,43,32,0.12)] border border-[#D3DFC8] hover:border-[#4E6B43]/40 transition-colors h-full">
+              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
                 <div>
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#4E6B43] mb-3">
+                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
                     STEP 1
                   </div>
                   <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
@@ -2209,28 +3082,28 @@ export default function App() {
                     Choose from our Featured Work or share a dream design or reference image. I'll let you know if I can bring it to life.
                   </p>
                 </div>
-                <div className="mt-6 pt-4 border-t border-[#D3DFC8]/70 flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
+                <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
                   <span>Inspo &amp; Sketches</span>
-                  <span className="w-2 h-2 rounded-full bg-[#FFF1B5]" />
+                  <span className="w-2 h-2 rounded-full bg-[#6F8F5F]" />
                 </div>
               </div>
             </ScrollReveal>
 
             {/* STEP 2 */}
             <ScrollReveal staggerIndex={1}>
-              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(31,43,32,0.12)] border border-[#D3DFC8] hover:border-[#4E6B43]/40 transition-colors h-full">
+              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
                 <div>
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#4E6B43] mb-3">
+                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
                     STEP 2
                   </div>
                   <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
                     Share Details &amp; Fit
                   </h3>
                   <p className="text-[16px] text-[#1F2B20]/80 leading-relaxed">
-                    Tap Make Order, note any favorites, and share your sizing details.
+                    Tap Order Now, note any favorites, and share your sizing details.
                   </p>
                 </div>
-                <div className="mt-6 pt-4 border-t border-[#D3DFC8]/70 flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
+                <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
                   <span>Custom Sizing</span>
                   <span className="w-2 h-2 rounded-full bg-[#F7B8CB]" />
                 </div>
@@ -2239,9 +3112,9 @@ export default function App() {
 
             {/* STEP 3 */}
             <ScrollReveal staggerIndex={2}>
-              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(31,43,32,0.12)] border border-[#D3DFC8] hover:border-[#4E6B43]/40 transition-colors h-full">
+              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
                 <div>
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#4E6B43] mb-3">
+                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
                     STEP 3
                   </div>
                   <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
@@ -2251,18 +3124,18 @@ export default function App() {
                     Confirm your order with a 50% deposit so we can start crafting it.
                   </p>
                 </div>
-                <div className="mt-6 pt-4 border-t border-[#D3DFC8]/70 flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
+                <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
                   <span>Deposit Confirms Slot</span>
-                  <span className="w-2 h-2 rounded-full bg-[#4E6B43]" />
+                  <span className="w-2 h-2 rounded-full bg-[#6F8F5F]" />
                 </div>
               </div>
             </ScrollReveal>
 
             {/* STEP 4 */}
             <ScrollReveal staggerIndex={3}>
-              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(31,43,32,0.12)] border border-[#D3DFC8] hover:border-[#4E6B43]/40 transition-colors h-full">
+              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
                 <div>
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#4E6B43] mb-3">
+                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
                     STEP 4
                   </div>
                   <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
@@ -2272,7 +3145,7 @@ export default function App() {
                     We'll message you when your order is complete and again just before it's dispatched.
                   </p>
                 </div>
-                <div className="mt-6 pt-4 border-t border-[#D3DFC8]/70 flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
+                <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
                   <span>Pick Up Mtaani</span>
                   <span className="w-2 h-2 rounded-full bg-[#E0764A]" />
                 </div>
@@ -2342,13 +3215,13 @@ export default function App() {
 
               {/* Right Side: Cream Form Card */}
               <ScrollReveal className="lg:col-span-7">
-                <div className="bg-[#FDFCF6] text-[#1F2B20] rounded-[20px] p-6 sm:p-8 md:p-9 shadow-2xl border border-[#D3DFC8]">
+                <div className="bg-[#FDFCF6] text-[#1F2B20] rounded-[20px] p-6 sm:p-8 md:p-9 shadow-[0_16px_40px_rgba(60,45,20,0.16)]">
                   <div className="flex items-center justify-between mb-6">
                     <h3 className="font-heading text-2xl sm:text-3xl text-[#1F2B20] tracking-[0.02em]">
                       Let's make your piece
                     </h3>
                     {!ordersOpen && (
-                      <span className="text-xs font-bold uppercase tracking-wider text-[#E0764A] bg-[#D3DFC8] px-2.5 py-1 rounded-full">
+                      <span className="text-xs font-bold uppercase tracking-wider text-[#E0764A] bg-[#EEE7D6] px-2.5 py-1 rounded-full">
                         Form Paused
                       </span>
                     )}
@@ -2365,7 +3238,7 @@ export default function App() {
                     <div>
                       <label
                         htmlFor="customerName"
-                        className="block text-[13px] font-bold uppercase tracking-wider text-[#4E6B43] mb-1.5"
+                        className="block text-[13px] font-bold uppercase tracking-wider text-[#6F8F5F] mb-1.5"
                       >
                         Customer Name <span className="text-[#E0764A]">*</span>
                       </label>
@@ -2379,10 +3252,10 @@ export default function App() {
                           if (nameError) setNameError(null);
                         }}
                         placeholder="e.g. Amani Mwangi"
-                        className={`w-full bg-[#E2EAD8] border rounded-xl px-4 py-3 text-base text-[#1F2B20] placeholder:text-[#1F2B20]/40 focus:outline-none transition-all disabled:cursor-not-allowed ${
+                        className={`w-full bg-[#F5EFE3] border rounded-xl px-4 py-3 text-base text-[#1F2B20] placeholder:text-[#1F2B20]/40 focus:outline-none transition-all disabled:cursor-not-allowed ${
                           nameError
                             ? "border-[#E0764A] ring-1 ring-[#E0764A]"
-                            : "border-[#D3DFC8] focus:ring-2 focus:ring-[#4E6B43]"
+                            : "border-[rgba(31,43,32,0.12)] focus:ring-2 focus:ring-[#6F8F5F]"
                         }`}
                       />
                       {nameError && (
@@ -2396,7 +3269,7 @@ export default function App() {
                     <div>
                       <label
                         htmlFor="orderType"
-                        className="block text-[13px] font-bold uppercase tracking-wider text-[#4E6B43] mb-1.5"
+                        className="block text-[13px] font-bold uppercase tracking-wider text-[#6F8F5F] mb-1.5"
                       >
                         Order Type
                       </label>
@@ -2407,7 +3280,7 @@ export default function App() {
                           disabled={!ordersOpen}
                           onChange={(e) => setOrderType(e.target.value)}
                           style={{ fontSize: "16px", paddingRight: "48px" }}
-                          className="w-full bg-[#E2EAD8] border border-[#D3DFC8] rounded-xl pl-4 py-3 text-[16px] text-[#1F2B20] focus:outline-none focus:ring-2 focus:ring-[#4E6B43] transition-all appearance-none cursor-pointer disabled:cursor-not-allowed"
+                          className="w-full bg-[#F5EFE3] border border-[rgba(31,43,32,0.12)] rounded-xl pl-4 py-3 text-[16px] text-[#1F2B20] focus:outline-none focus:ring-2 focus:ring-[#6F8F5F] transition-all appearance-none cursor-pointer disabled:cursor-not-allowed"
                         >
                           <option value="In-stock piece">In-stock piece</option>
                           <option value="Custom order (my own idea)">
@@ -2424,20 +3297,20 @@ export default function App() {
 
                       {/* Display basket items when user has pieces in basket */}
                       {basket.length > 0 && orderType === "In-stock piece" ? (
-                        <div className="mt-2 text-xs bg-[#DDEBD3] text-[#1F2B20] px-3.5 py-2 rounded-lg flex items-center justify-between font-medium gap-2">
+                        <div className="mt-2 text-xs bg-[#EEE7D6] text-[#1F2B20] px-3.5 py-2 rounded-lg flex items-center justify-between font-medium gap-2">
                           <span className="truncate">
                             Basket items: <strong>{basket.map((i) => `${i.quantity}x ${getItemName(i.productId)}`).join(", ")}</strong>
                           </span>
                           <button
                             type="button"
                             onClick={() => setCartOpen(true)}
-                            className="text-xs text-[#4E6B43] font-bold hover:underline shrink-0 cursor-pointer"
+                            className="text-xs text-[#6F8F5F] font-bold hover:underline shrink-0 cursor-pointer"
                           >
                             View basket
                           </button>
                         </div>
                       ) : selectedItemName && orderType === "In-stock piece" ? (
-                        <div className="mt-2 text-xs bg-[#DDEBD3] text-[#1F2B20] px-3.5 py-1.5 rounded-lg flex items-center justify-between font-medium">
+                        <div className="mt-2 text-xs bg-[#EEE7D6] text-[#1F2B20] px-3.5 py-1.5 rounded-lg flex items-center justify-between font-medium">
                           <span>
                             Selected item: <strong>{selectedItemName}</strong>
                           </span>
@@ -2456,7 +3329,7 @@ export default function App() {
                     <div>
                       <label
                         htmlFor="orderNotes"
-                        className="block text-[13px] font-bold uppercase tracking-wider text-[#4E6B43] mb-1.5"
+                        className="block text-[13px] font-bold uppercase tracking-wider text-[#6F8F5F] mb-1.5"
                       >
                         Notes / Preferences
                       </label>
@@ -2467,22 +3340,22 @@ export default function App() {
                         value={orderNotes}
                         onChange={(e) => setOrderNotes(e.target.value)}
                         placeholder="Share any ideas, measurements, deadlines, and other preferences..."
-                        className="w-full bg-[#E2EAD8] border border-[#D3DFC8] rounded-xl p-4 text-base text-[#1F2B20] placeholder:text-[#1F2B20]/40 focus:outline-none focus:ring-2 focus:ring-[#4E6B43] transition-all resize-none disabled:cursor-not-allowed"
+                        className="w-full bg-[#F5EFE3] border border-[rgba(31,43,32,0.12)] rounded-xl p-4 text-base text-[#1F2B20] placeholder:text-[#1F2B20]/40 focus:outline-none focus:ring-2 focus:ring-[#6F8F5F] transition-all resize-none disabled:cursor-not-allowed"
                       />
                       <p className="text-xs text-[#1F2B20]/70 mt-1.5 font-medium">
                         Have an inspiration photo? You can send it in WhatsApp after you tap send.
                       </p>
                     </div>
 
-                    {/* Deep sage button disabled when orders are closed */}
+                    {/* Sage button disabled when orders are closed */}
                     <div className="pt-2">
                       <button
                         type="submit"
                         disabled={!ordersOpen}
                         className={`w-full font-bold text-base py-3.5 px-6 rounded-full transition-colors shadow-md flex items-center justify-center gap-2 ${
                           ordersOpen
-                            ? "bg-[#4E6B43] hover:bg-[#3F5A36] text-[#FDFCF6] cursor-pointer"
-                            : "bg-[#4E6B43]/40 text-[#FDFCF6]/80 cursor-not-allowed"
+                            ? "bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] cursor-pointer"
+                            : "bg-[#6F8F5F]/40 text-[#FFFFFF]/80 cursor-not-allowed"
                         }`}
                       >
                         {ordersOpen && <Send className="w-4 h-4" />}
@@ -2494,7 +3367,7 @@ export default function App() {
                       </button>
 
                       {ordersOpen && whatsappStatusNote ? (
-                        <p className="text-center text-xs text-[#4E6B43] font-bold mt-2.5">
+                        <p className="text-center text-xs text-[#6F8F5F] font-bold mt-2.5">
                           {whatsappStatusNote}
                         </p>
                       ) : (
@@ -2556,14 +3429,14 @@ export default function App() {
             </button>
           </div>
 
-          {/* Social links with icons on small circles in #F7B8CB */}
-          <div className="flex items-center gap-4">
+          {/* Social links with icons on small circles in #F7B8CB: centered horizontally, 16px apart on their own row */}
+          <div className="flex items-center justify-center gap-4 w-full">
             <a
               href="https://www.instagram.com/ms.sage_creates"
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="Instagram @ms.sage_creates"
-              className="w-10 h-10 rounded-full bg-[#F7B8CB] flex items-center justify-center text-[#1F2B20] transition-colors shadow-xs"
+              aria-label="Instagram"
+              className="w-10 h-10 rounded-full bg-[#F7B8CB] flex items-center justify-center text-[#1F2B20] hover:opacity-80 transition-opacity shadow-xs"
             >
               <Instagram className="w-5 h-5" />
             </a>
@@ -2571,16 +3444,13 @@ export default function App() {
               href="https://www.tiktok.com/@ms.sage_creates"
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="TikTok @ms.sage_creates"
-              className="w-10 h-10 rounded-full bg-[#F7B8CB] flex items-center justify-center text-[#1F2B20] transition-colors shadow-xs"
+              aria-label="TikTok"
+              className="w-10 h-10 rounded-full bg-[#F7B8CB] flex items-center justify-center text-[#1F2B20] hover:opacity-80 transition-opacity shadow-xs"
             >
               <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
                 <path d="M19.589 6.686a4.793 4.793 0 0 1-3.77-4.245V2h-3.445v13.672a2.896 2.896 0 0 1-2.882 2.766 2.89 2.89 0 0 1 2.896-2.896c.394 0 .768.082 1.11.228V9.378a6.376 6.376 0 0 0-1.11-.098 6.335 6.335 0 0 0-6.338 6.338 6.335 6.335 0 0 0 6.338 6.338 6.335 6.335 0 0 0 6.338-6.338V8.784a8.212 8.212 0 0 0 4.759 1.487V6.828c-.347-.02-.693-.068-1.002-.142z" />
               </svg>
             </a>
-            <span className="text-sm font-bold text-[#1F2B20]">
-              @ms.sage_creates
-            </span>
           </div>
 
           {/* Copyright: 5 taps in 3s enables owner edit mode on mobile */}
@@ -2597,11 +3467,11 @@ export default function App() {
       {editMode && (
         <aside
           aria-label="Owner edit mode controls"
-          className="fixed bottom-4 left-4 z-50 bg-[#1F2B20] text-[#FDFCF6] text-xs font-bold px-4 py-2 rounded-full shadow-lg border border-[#D3DFC8]/30 flex items-center gap-2 select-none animate-in fade-in slide-in-from-bottom-2 duration-150"
+          className="fixed bottom-4 left-4 z-50 bg-[#1F2B20] text-[#FFFFFF] text-xs font-bold px-4 py-2 rounded-full shadow-[0_8px_24px_rgba(60,45,20,0.20)] border border-[#EEE7D6]/20 flex items-center gap-2 select-none animate-in fade-in slide-in-from-bottom-2 duration-150"
         >
-          <span className="w-2 h-2 rounded-full bg-[#4E6B43] animate-pulse" />
+          <span className="w-2 h-2 rounded-full bg-[#6F8F5F] animate-pulse" />
           <span>Edit mode on</span>
-          <span className="text-[#FDFCF6]/40">·</span>
+          <span className="text-[#FFFFFF]/40">·</span>
           <button
             type="button"
             onClick={() => {
@@ -2624,9 +3494,9 @@ export default function App() {
         <div
           role="status"
           aria-live="polite"
-          className="fixed top-20 md:top-24 left-1/2 -translate-x-1/2 z-[70] bg-[#1F2B20] text-[#FDFCF6] text-sm font-bold px-5 py-2.5 rounded-full shadow-xl flex items-center gap-2.5 border border-[#D3DFC8]/20 animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-none"
+          className="fixed top-20 md:top-24 left-1/2 -translate-x-1/2 z-[70] bg-[#1F2B20] text-[#FFFFFF] text-sm font-bold px-5 py-2.5 rounded-full shadow-[0_10px_25px_rgba(60,45,20,0.18)] flex items-center gap-2.5 border border-[#EEE7D6]/20 animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-none"
         >
-          <span className="w-2 h-2 rounded-full bg-[#4E6B43] shrink-0" />
+          <span className="w-2 h-2 rounded-full bg-[#6F8F5F] shrink-0" />
           <span>{toastMessage}</span>
         </div>
       )}
@@ -2648,21 +3518,21 @@ export default function App() {
             aria-label="Order basket"
             className="fixed z-50 bg-[#FDFCF6] flex flex-col shadow-2xl transition-all duration-300
               /* Phone: bottom sheet */
-              inset-x-0 bottom-0 max-h-[85dvh] rounded-t-[28px] border-t border-[#D3DFC8]
+              inset-x-0 bottom-0 max-h-[85dvh] rounded-t-[28px]
               /* Desktop: right-side drawer */
-              md:inset-y-0 md:right-0 md:left-auto md:h-full md:max-h-full md:w-[420px] md:rounded-l-[28px] md:rounded-tr-none md:border-l md:border-t-0"
+              md:inset-y-0 md:right-0 md:left-auto md:h-full md:max-h-full md:w-[420px] md:rounded-l-[28px] md:rounded-tr-none"
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-[#D3DFC8] shrink-0">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[rgba(60,45,20,0.08)] shrink-0">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-[#D3DFC8] text-[#4E6B43] flex items-center justify-center">
+                <div className="w-8 h-8 rounded-full bg-[#EEE7D6] text-[#6F8F5F] flex items-center justify-center">
                   <ShoppingCart className="w-4 h-4" />
                 </div>
                 <h3 className="font-heading text-xl text-[#1F2B20] tracking-[0.02em]">
                   Order Basket
                 </h3>
                 {totalBasketItems > 0 && (
-                  <span className="bg-[#DDEBD3] text-[#1F2B20] text-xs font-bold px-2.5 py-0.5 rounded-full">
+                  <span className="bg-[#EEE7D6] text-[#1F2B20] text-xs font-bold px-2.5 py-0.5 rounded-full">
                     {totalBasketItems} {totalBasketItems === 1 ? "item" : "items"}
                   </span>
                 )}
@@ -2671,7 +3541,7 @@ export default function App() {
                 type="button"
                 onClick={() => setCartOpen(false)}
                 aria-label="Close basket"
-                className="w-8 h-8 rounded-full bg-[#D3DFC8] hover:bg-[#FFF1B5] text-[#1F2B20] flex items-center justify-center transition-colors cursor-pointer"
+                className="w-8 h-8 rounded-full bg-[#EEE7D6] hover:bg-[#FDFCF6] text-[#1F2B20] flex items-center justify-center transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2681,7 +3551,7 @@ export default function App() {
             <div className="flex-1 overflow-y-auto px-6 py-4">
               {basket.length === 0 ? (
                 <div className="h-full min-h-[240px] flex flex-col items-center justify-center text-center py-10 px-2">
-                  <div className="w-14 h-14 rounded-full bg-[#D3DFC8] text-[#4E6B43] flex items-center justify-center mb-4">
+                  <div className="w-14 h-14 rounded-full bg-[#EEE7D6] text-[#6F8F5F] flex items-center justify-center mb-4">
                     <ShoppingCart className="w-6 h-6" />
                   </div>
                   <p className="font-heading text-xl text-[#1F2B20] mb-2 tracking-[0.02em]">
@@ -2700,15 +3570,15 @@ export default function App() {
                         shopSection.scrollIntoView({ behavior: "smooth" });
                       }
                     }}
-                    className="bg-[#4E6B43] hover:bg-[#3F5A36] text-[#FDFCF6] font-bold text-sm px-6 py-3 rounded-full transition-colors cursor-pointer shadow-xs"
+                    className="bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] font-bold text-sm px-6 py-3 rounded-full transition-colors cursor-pointer shadow-xs"
                   >
                     Browse the shop
                   </button>
                 </div>
               ) : (
-                <div className="flex flex-col divide-y divide-[#D3DFC8]">
+                <div className="flex flex-col divide-y divide-[rgba(60,45,20,0.08)]">
                   {basket.map((item) => {
-                    const product = PRODUCTS.find((p) => p.id === item.productId);
+                    const product = products.find((p) => p.id === item.productId);
                     const currentName = product ? getProductField(product, "name") : "Crochet piece";
                     const photoUrl = product ? savedImages[product.id] : undefined;
 
@@ -2722,10 +3592,10 @@ export default function App() {
                             <img
                               src={photoUrl}
                               alt={currentName}
-                              className="w-12 h-14 rounded-xl object-cover shrink-0 bg-[#D3DFC8]"
+                              className="w-12 h-14 rounded-xl object-cover shrink-0 bg-[#E9E3D3]"
                             />
                           ) : (
-                            <div className="w-12 h-14 rounded-xl bg-[#D3DFC8] flex items-center justify-center text-[#4E6B43] shrink-0">
+                            <div className="w-12 h-14 rounded-xl bg-[#E9E3D3] flex items-center justify-center text-[#6F8F5F] shrink-0">
                               <ShoppingCart className="w-5 h-5 opacity-60" />
                             </div>
                           )}
@@ -2745,12 +3615,12 @@ export default function App() {
                         </div>
 
                         {/* Quantity control (- and +) */}
-                        <div className="flex items-center bg-[#D3DFC8] rounded-full p-1 shrink-0">
+                        <div className="flex items-center bg-[#EEE7D6] rounded-full p-1 shrink-0">
                           <button
                             type="button"
                             onClick={() => updateQuantity(item.productId, -1)}
                             aria-label={`Decrease quantity of ${currentName}`}
-                            className="w-7 h-7 rounded-full bg-[#FDFCF6] hover:bg-[#FFF1B5] text-[#1F2B20] flex items-center justify-center transition-colors cursor-pointer"
+                            className="w-7 h-7 rounded-full bg-[#FDFCF6] hover:bg-[#FFFFFF] text-[#1F2B20] flex items-center justify-center transition-colors cursor-pointer"
                           >
                             <Minus className="w-3.5 h-3.5 stroke-[2.5]" />
                           </button>
@@ -2761,7 +3631,7 @@ export default function App() {
                             type="button"
                             onClick={() => updateQuantity(item.productId, 1)}
                             aria-label={`Increase quantity of ${currentName}`}
-                            className="w-7 h-7 rounded-full bg-[#FDFCF6] hover:bg-[#FFF1B5] text-[#1F2B20] flex items-center justify-center transition-colors cursor-pointer"
+                            className="w-7 h-7 rounded-full bg-[#FDFCF6] hover:bg-[#FFFFFF] text-[#1F2B20] flex items-center justify-center transition-colors cursor-pointer"
                           >
                             <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
                           </button>
@@ -2775,7 +3645,7 @@ export default function App() {
 
             {/* Bottom button: sage button "Continue to order" */}
             {basket.length > 0 && (
-              <div className="p-5 border-t border-[#D3DFC8] bg-[#FDFCF6] shrink-0">
+              <div className="p-5 border-t border-[rgba(60,45,20,0.08)] bg-[#FDFCF6] shrink-0">
                 <button
                   type="button"
                   onClick={() => {
@@ -2787,7 +3657,7 @@ export default function App() {
                       orderSection.scrollIntoView({ behavior: "smooth" });
                     }
                   }}
-                  className="w-full bg-[#4E6B43] hover:bg-[#3F5A36] text-[#FDFCF6] font-bold text-base py-3.5 px-6 rounded-full text-center transition-colors cursor-pointer shadow-md"
+                  className="w-full bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] font-bold text-base py-3.5 px-6 rounded-full text-center transition-colors cursor-pointer shadow-md"
                 >
                   Continue to order
                 </button>
@@ -2800,11 +3670,11 @@ export default function App() {
       {/* 1. FAQ Dialog: max-height: 85dvh and overflow-y: auto */}
       {faqOpen && (
         <div className="fixed inset-0 z-50 bg-[#1F2B20]/60 backdrop-blur-xs flex items-center justify-center p-4 min-h-dvh overflow-y-auto">
-          <div className="bg-[#FDFCF6] rounded-[24px] p-6 sm:p-7 max-w-lg w-full max-h-[85dvh] overflow-y-auto shadow-2xl border border-[#D3DFC8] relative my-auto">
+          <div className="bg-[#FDFCF6] rounded-[24px] p-6 sm:p-7 max-w-lg w-full max-h-[85dvh] overflow-y-auto shadow-[0_20px_60px_rgba(60,45,20,0.18)] relative my-auto">
             <button
               type="button"
               onClick={() => setFaqOpen(false)}
-              className="absolute top-5 right-5 w-8 h-8 rounded-full bg-[#D3DFC8] flex items-center justify-center text-[#1F2B20] hover:bg-[#FFF1B5] transition-colors cursor-pointer"
+              className="absolute top-5 right-5 w-8 h-8 rounded-full bg-[#EEE7D6] flex items-center justify-center text-[#1F2B20] hover:bg-[#FDFCF6] transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -2814,7 +3684,7 @@ export default function App() {
               className="font-heading text-2xl text-[#1F2B20] mb-5 tracking-[0.02em]"
             />
             <div className="space-y-4 text-left text-sm text-[#1F2B20]">
-              <div className="bg-[#E2EAD8] p-4 rounded-xl">
+              <div className="bg-[#EEE7D6] p-4 rounded-xl shadow-[0_4px_12px_rgba(60,45,20,0.06)]">
                 <div className="font-bold text-base mb-1 text-[#1F2B20]">
                   How long does a custom order take?
                 </div>
@@ -2822,7 +3692,7 @@ export default function App() {
                   Made-to-measure pieces usually take between 7 to 21 days depending on design complexity and current queue. In-stock drops are dispatched weekly on specific days, as will be communicated.
                 </div>
               </div>
-              <div className="bg-[#E2EAD8] p-4 rounded-xl">
+              <div className="bg-[#EEE7D6] p-4 rounded-xl shadow-[0_4px_12px_rgba(60,45,20,0.06)]">
                 <div className="font-bold text-base mb-1 text-[#1F2B20]">
                   How does Pick Up Mtaani work?
                 </div>
@@ -2830,7 +3700,7 @@ export default function App() {
                   Pick Up Mtaani allows you to collect your package from hundreds of secure pickup agent locations across Nairobi and neighboring towns at affordable rates. Delivery is available through Pick Up Mtaani as well.
                 </div>
               </div>
-              <div className="bg-[#E2EAD8] p-4 rounded-xl">
+              <div className="bg-[#EEE7D6] p-4 rounded-xl shadow-[0_4px_12px_rgba(60,45,20,0.06)]">
                 <div className="font-bold text-base mb-1 text-[#1F2B20]">
                   How do I care for my crochet piece?
                 </div>
@@ -2838,7 +3708,7 @@ export default function App() {
                   Gently hand-wash in cool water with mild wool detergent. Lay flat on a clean towel to dry. Never hang heavy wet garments or machine tumble-dry.
                 </div>
               </div>
-              <div className="bg-[#E2EAD8] p-4 rounded-xl">
+              <div className="bg-[#EEE7D6] p-4 rounded-xl shadow-[0_4px_12px_rgba(60,45,20,0.06)]">
                 <div className="font-bold text-base mb-1 text-[#1F2B20]">
                   Do you ship outside Nairobi?
                 </div>
@@ -2854,11 +3724,11 @@ export default function App() {
       {/* Policy Dialog */}
       {policyOpen && (
         <div className="fixed inset-0 z-50 bg-[#1F2B20]/60 backdrop-blur-xs flex items-center justify-center p-4 min-h-dvh overflow-y-auto">
-          <div className="bg-[#FDFCF6] rounded-[24px] p-6 sm:p-7 max-w-lg w-full max-h-[85dvh] overflow-y-auto shadow-2xl border border-[#D3DFC8] relative my-auto">
+          <div className="bg-[#FDFCF6] rounded-[24px] p-6 sm:p-7 max-w-lg w-full max-h-[85dvh] overflow-y-auto shadow-[0_20px_60px_rgba(60,45,20,0.18)] relative my-auto">
             <button
               type="button"
               onClick={() => setPolicyOpen(null)}
-              className="absolute top-5 right-5 w-8 h-8 rounded-full bg-[#D3DFC8] flex items-center justify-center text-[#1F2B20] hover:bg-[#FFF1B5] transition-colors cursor-pointer"
+              className="absolute top-5 right-5 w-8 h-8 rounded-full bg-[#EEE7D6] flex items-center justify-center text-[#1F2B20] hover:bg-[#FDFCF6] transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
