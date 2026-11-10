@@ -26,6 +26,14 @@ import {
 import defaultHeroImage from "./assets/hero_featured.png";
 import defaultHeroImageWide from "./assets/hero_featured_wide.jpg";
 import defaultHeroImageSquare from "./assets/hero_featured_square.jpg";
+import bagMarketTote from "./assets/products/bag_market_tote.jpg";
+import bagSageHobo from "./assets/products/bag_sage_hobo.jpg";
+import bagMiniCrossbody from "./assets/products/bag_mini_crossbody.jpg";
+import bagTerracottaRibbed from "./assets/products/bag_terracotta_ribbed.jpg";
+import bagBlushWristlet from "./assets/products/bag_blush_wristlet.jpg";
+import bagCheckeredTote from "./assets/products/bag_checkered_tote.jpg";
+import bagCrescentTwine from "./assets/products/bag_crescent_twine.jpg";
+import bagDianiNet from "./assets/products/bag_diani_net.jpg";
 
 // Google Apps Script Web App URL for logging orders to Google Sheets
 // Set VITE_GOOGLE_SCRIPT_URL in .env or local storage
@@ -102,72 +110,80 @@ export interface Product {
 }
 
 export const PRODUCTS: Product[] = [
-  // --- ROW 1: IN STOCK PIECES (4) ---
+  // --- ROW 1: RECENT CREATIONS (In Stock) ---
   {
     id: "prod-1",
-    name: "Lorem Ipsum Dolor",
+    name: "Nairobi Market Tote",
     category: "in-stock",
-    label: "LOREM IPSUM",
-    description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    price: "KES 0,000",
+    label: "TOTE BAG",
+    description: "Handcrafted chunky cotton cord tote with structured ribbed double handles and organic texture.",
+    price: "KES 5,800",
+    image: bagMarketTote,
   },
   {
     id: "prod-2",
-    name: "Lorem Ipsum Dolor",
+    name: "Kikapu Slouchy Hobo",
     category: "in-stock",
-    label: "LOREM IPSUM",
-    description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    price: "KES 0,000",
+    label: "HOBO BAG",
+    description: "Meditation in stitches: relaxed everyday slouch bag in muted sage green chunky wool yarn.",
+    price: "KES 4,500",
+    image: bagSageHobo,
   },
   {
     id: "prod-3",
-    name: "Lorem Ipsum Dolor",
+    name: "Savannah Mini Crossbody",
     category: "in-stock",
-    label: "LOREM IPSUM",
-    description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    price: "KES 0,000",
+    label: "CROSSBODY",
+    description: "Compact textured crochet pouch in buttercup yellow and ecru with braided shoulder strap.",
+    price: "KES 3,200",
+    image: bagMiniCrossbody,
   },
   {
     id: "prod-4",
-    name: "Lorem Ipsum Dolor",
+    name: "Acacia Ribbed Shoulder Bag",
     category: "in-stock",
-    label: "LOREM IPSUM",
-    description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    price: "KES 0,000",
+    label: "SHOULDER BAG",
+    description: "Sculptural ribbed crochet in rich terracotta rust cord with comfortable wide strap.",
+    price: "KES 4,800",
+    image: bagTerracottaRibbed,
   },
 
-  // --- ROW 2: PAST CREATIONS (4) ---
+  // --- ROW 2: PAST CREATIONS (Archive & Inspo) ---
   {
     id: "prod-5",
-    name: "Lorem Ipsum Dolor",
+    name: "The Mara Knot Bag",
     category: "past-creation",
-    label: "LOREM IPSUM",
-    description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    price: "KES 0,000",
+    label: "WRISTLET",
+    description: "Japanese-inspired single-loop wristlet in soft dusty blush pink cotton yarn. Custom archival drop.",
+    price: "KES 3,600",
+    image: bagBlushWristlet,
   },
   {
     id: "prod-6",
-    name: "Lorem Ipsum Dolor",
+    name: "Rift Valley Checkered Tote",
     category: "past-creation",
-    label: "LOREM IPSUM",
-    description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    price: "KES 0,000",
+    label: "TOTE BAG",
+    description: "Handcrafted two-tone checkerboard tote in forest green and warm cream squares.",
+    price: "KES 6,200",
+    image: bagCheckeredTote,
   },
   {
     id: "prod-7",
-    name: "Lorem Ipsum Dolor",
+    name: "Karura Crescent Moon Bag",
     category: "past-creation",
-    label: "LOREM IPSUM",
-    description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    price: "KES 0,000",
+    label: "SHOULDER BAG",
+    description: "Architectural curved crescent silhouette hand-crocheted in heavyweight natural twine.",
+    price: "KES 5,200",
+    image: bagCrescentTwine,
   },
   {
     id: "prod-8",
-    name: "Lorem Ipsum Dolor",
+    name: "Diani Summer Net Bag",
     category: "past-creation",
-    label: "LOREM IPSUM",
-    description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-    price: "KES 0,000",
+    label: "MARKET BAG",
+    description: "Airy openwork stitch mesh bag with reinforced handles, designed for beach and market days.",
+    price: "KES 2,800",
+    image: bagDianiNet,
   },
 ];
 
@@ -873,7 +889,8 @@ function ProductImageArea({
               alt={product.name}
               loading="eager"
               decoding="async"
-              className="relative z-10 w-full h-full object-contain"
+              referrerPolicy="no-referrer"
+              className="relative z-10 w-full h-full object-contain object-center block"
             />
           </div>
         ) : (
@@ -882,7 +899,8 @@ function ProductImageArea({
             alt={product.name}
             loading="eager"
             decoding="async"
-            className="w-full h-full object-cover"
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover object-center block"
           />
         )}
 
@@ -2145,7 +2163,17 @@ export default function App() {
   // Helper to read card text with user edits
   const getProductField = (product: Product, field: "name" | "label" | "description" | "price"): string => {
     if (cardEdits[product.id] && cardEdits[product.id][field]) {
-      return cardEdits[product.id][field]!;
+      const val = cardEdits[product.id][field]!;
+      // Prevent stale Lorem Ipsum placeholder text from overriding real products
+      if (
+        val &&
+        val !== "Lorem Ipsum Dolor" &&
+        val !== "LOREM IPSUM" &&
+        val !== "Lorem ipsum dolor sit amet, consectetur adipiscing elit." &&
+        val !== "KES 0,000"
+      ) {
+        return val;
+      }
     }
     return product[field];
   };
@@ -2198,7 +2226,18 @@ export default function App() {
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
+            const hasRealCustomItems = parsed.some(
+              (p: Product) => p.name && p.name !== "Lorem Ipsum Dolor" && p.name.trim() !== ""
+            );
+            if (hasRealCustomItems) {
+              return parsed.map((p: Product) => {
+                const defaultProd = PRODUCTS.find((dp) => dp.id === p.id);
+                return {
+                  ...p,
+                  image: p.image || defaultProd?.image,
+                };
+              });
+            }
           }
         }
       }
@@ -2252,7 +2291,12 @@ export default function App() {
     } catch {
       // fallback
     }
-    return {};
+    return {
+      "prod-5": "sold",
+      "prod-6": "sold",
+      "prod-7": "sold",
+      "prod-8": "available",
+    };
   });
 
   const handleToggleCardStatus = (productId: string) => {
