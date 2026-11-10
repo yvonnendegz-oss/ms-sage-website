@@ -24,6 +24,68 @@ import {
   RefreshCw,
 } from "lucide-react";
 import defaultHeroImage from "./assets/hero_featured.png";
+import defaultHeroImageWide from "./assets/hero_featured_wide.jpg";
+import defaultHeroImageSquare from "./assets/hero_featured_square.jpg";
+
+// Google Apps Script Web App URL for logging orders to Google Sheets
+// Set VITE_GOOGLE_SCRIPT_URL in .env or local storage
+const GOOGLE_SCRIPT_URL =
+  (import.meta.env.VITE_GOOGLE_SCRIPT_URL as string) ||
+  (typeof window !== "undefined"
+    ? localStorage.getItem("ms_sage_google_script_url") || ""
+    : "");
+
+export interface ProcessStepItem {
+  id: string;
+  step: string;
+  title: string;
+  text: React.ReactNode;
+  badgeLabel: string;
+  dotColor: string;
+}
+
+export const PROCESS_STEPS: ProcessStepItem[] = [
+  {
+    id: "step-1",
+    step: "STEP 1",
+    title: "Pick or Pitch",
+    text: "Choose from our Featured Work or share a dream design or reference image. I'll let you know if I can bring it to life.",
+    badgeLabel: "Inspo & Sketches",
+    dotColor: "#6F8F5F",
+  },
+  {
+    id: "step-2",
+    step: "STEP 2",
+    title: "Share Your Details",
+    text: "Tap Order Now, tell us which piece you love or describe your own idea, and share any size, color or design preferences.",
+    badgeLabel: "Custom Sizing",
+    dotColor: "#F7B8CB",
+  },
+  {
+    id: "step-3",
+    step: "STEP 3",
+    title: "Secure Your Slot",
+    text: (
+      <>
+        Confirm your order with a{" "}
+        <strong style={{ fontWeight: 800 }} className="font-extrabold text-[#1F2B20]">
+          50% deposit
+        </strong>{" "}
+        so we can start crafting it.
+      </>
+    ),
+    badgeLabel: "Deposit Confirms Slot",
+    dotColor: "#6F8F5F",
+  },
+  {
+    id: "step-4",
+    step: "STEP 4",
+    title: "Made with Care & Delivered",
+    text: "We'll message you when your order is complete and again just before it's dispatched.",
+    badgeLabel: "Pick Up Mtaani",
+    dotColor: "#E0764A",
+  },
+];
 
 /* ==========================================================================
    PRODUCT DATA ARRAY (EDIT PRODUCT DETAILS HERE)
@@ -520,8 +582,10 @@ function ScrollReveal({
   staggerIndex?: number;
   className?: string;
 }) {
+  const isMobileDeck = className.includes("md:hidden");
   const [hasMounted, setHasMounted] = useState(false);
-  const [revealed, setRevealed] = useState(false);
+  // 4. Fix reveal animation: deck must be visible by default (never left at opacity 0)
+  const [revealed, setRevealed] = useState(isMobileDeck);
   const [reducedMotion, setReducedMotion] = useState(false);
   const elRef = useRef<HTMLDivElement>(null);
 
@@ -542,15 +606,25 @@ function ScrollReveal({
           observer.disconnect();
         }
       },
-      { threshold: 0.15 }
+      { threshold: 0.02 }
     );
 
     if (elRef.current) observer.observe(elRef.current);
-    return () => observer.disconnect();
+
+    // Safety: if the element/deck is still hidden 1 second after mount, force it visible
+    const safetyTimer = setTimeout(() => {
+      setRevealed(true);
+    }, 1000);
+
+    return () => {
+      observer.disconnect();
+      clearTimeout(safetyTimer);
+    };
   }, []);
 
   const shouldAnimate = hasMounted && !reducedMotion;
-  const isVisible = !shouldAnimate || revealed;
+  // Mobile deck stays visible by default so it never stays at opacity 0
+  const isVisible = isMobileDeck || !shouldAnimate || revealed;
   const delayMs = staggerIndex * 80;
 
   return (
@@ -789,12 +863,16 @@ function ProductImageArea({
                 src={photoUrl}
                 alt=""
                 aria-hidden="true"
+                loading="eager"
+                decoding="async"
                 className="absolute inset-0 w-full h-full object-cover scale-[1.25] blur-[24px] pointer-events-none select-none"
               />
             )}
             <img
               src={photoUrl}
               alt={product.name}
+              loading="eager"
+              decoding="async"
               className="relative z-10 w-full h-full object-contain"
             />
           </div>
@@ -802,6 +880,8 @@ function ProductImageArea({
           <img
             src={photoUrl}
             alt={product.name}
+            loading="eager"
+            decoding="async"
             className="w-full h-full object-cover"
           />
         )}
@@ -902,25 +982,7 @@ function ProductImageArea({
    Stacked card deck with pointer drag gestures, rubber-band edges, dots & arrow keys
    ========================================================================== */
 
-function MobileCardDeck({
-  products,
-  savedImages,
-  cardEdits,
-  cardFit,
-  cardStatus,
-  editMode,
-  onSelectProductForOrder,
-  onImageUpload,
-  onImageRemove,
-  onCardTextChange,
-  onSetCardFit,
-  onToggleStatus,
-  onDeleteCard,
-  onAddCard,
-  handleKeyDownNoEnter,
-  getProductField,
-  isPastCreations = false,
-}: {
+export interface MobileCardDeckProps {
   products: Product[];
   savedImages: Record<string, string>;
   cardEdits: Record<string, { name?: string; label?: string; description?: string; price?: string }>;
@@ -938,15 +1000,234 @@ function MobileCardDeck({
   handleKeyDownNoEnter: (e: React.KeyboardEvent<HTMLElement>) => void;
   getProductField: (product: Product, field: "name" | "label" | "description" | "price") => string;
   isPastCreations?: boolean;
-}) {
+}
+
+/* ==========================================================================
+   MOBILE SCROLL-SNAP ROW FALLBACK (screens <= 768px)
+   Renders if deck fails or for error resilience so phone view is never empty
+   ========================================================================== */
+
+function MobileScrollRowFallback({
+  products,
+  savedImages,
+  cardEdits,
+  cardFit,
+  cardStatus,
+  editMode,
+  onSelectProductForOrder,
+  onImageUpload,
+  onImageRemove,
+  onCardTextChange,
+  onSetCardFit,
+  onToggleStatus,
+  onDeleteCard,
+  handleKeyDownNoEnter,
+  getProductField,
+  isPastCreations = false,
+}: MobileCardDeckProps) {
+  return (
+    <div
+      className="w-full flex gap-4 overflow-x-auto scroll-smooth snap-x snap-mandatory py-4 px-2 no-scrollbar"
+      style={{ WebkitOverflowScrolling: "touch" }}
+      aria-label={`${isPastCreations ? "Past creations" : "Recent creations"} cards`}
+    >
+      {products.map((product) => {
+        const photoUrl = savedImages[product.id] || product.image;
+        const name = getProductField(product, "name");
+        const label = getProductField(product, "label");
+        const description = getProductField(product, "description");
+        const price = getProductField(product, "price");
+        const status = (cardStatus && cardStatus[product.id]) || "sold";
+
+        return (
+          <article
+            key={product.id}
+            className="w-[min(82vw,300px)] shrink-0 snap-center bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] relative"
+          >
+            {editMode && onDeleteCard && (
+              <div className="absolute top-2.5 right-2.5 z-20">
+                <DeleteCardButton
+                  onDelete={() => onDeleteCard(product.id)}
+                  disabled={products.length <= 1}
+                />
+              </div>
+            )}
+            <div>
+              <ProductImageArea
+                product={product}
+                photoUrl={photoUrl}
+                editMode={editMode}
+                fitMode={cardFit[product.id] || "fill"}
+                onSetFit={(fit) => onSetCardFit(product.id, fit)}
+                onUpload={(e) => {
+                  if (e.target.files?.[0]) {
+                    onImageUpload(product.id, e.target.files[0]);
+                  }
+                }}
+                onRemove={() => onImageRemove(product.id)}
+              />
+              <div
+                contentEditable={editMode}
+                suppressContentEditableWarning={true}
+                onKeyDown={editMode ? handleKeyDownNoEnter : undefined}
+                onBlur={
+                  editMode
+                    ? (e) => onCardTextChange(product.id, "label", e.currentTarget.textContent || "")
+                    : undefined
+                }
+                className="text-[13px] font-bold uppercase tracking-wider text-[#6F8F5F] mb-1"
+              >
+                {label}
+              </div>
+              <h4
+                contentEditable={editMode}
+                suppressContentEditableWarning={true}
+                onKeyDown={editMode ? handleKeyDownNoEnter : undefined}
+                onBlur={
+                  editMode
+                    ? (e) => onCardTextChange(product.id, "name", e.currentTarget.textContent || "")
+                    : undefined
+                }
+                className="font-heading text-xl text-[#1F2B20] leading-snug mb-1.5 tracking-[0.02em]"
+              >
+                {name}
+              </h4>
+              <p
+                contentEditable={editMode}
+                suppressContentEditableWarning={true}
+                onKeyDown={editMode ? handleKeyDownNoEnter : undefined}
+                onBlur={
+                  editMode
+                    ? (e) => onCardTextChange(product.id, "description", e.currentTarget.textContent || "")
+                    : undefined
+                }
+                className="text-sm text-[#1F2B20]/80 leading-relaxed mb-4"
+              >
+                {description}
+              </p>
+            </div>
+            <div className="pt-3 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between gap-2">
+              <span
+                contentEditable={editMode}
+                suppressContentEditableWarning={true}
+                onKeyDown={editMode ? handleKeyDownNoEnter : undefined}
+                onBlur={
+                  editMode
+                    ? (e) => onCardTextChange(product.id, "price", e.currentTarget.textContent || "")
+                    : undefined
+                }
+                className="font-heading text-lg font-bold text-[#E0764A]"
+              >
+                {price}
+              </span>
+              {!isPastCreations ? (
+                <button
+                  type="button"
+                  onClick={() => onSelectProductForOrder && onSelectProductForOrder(product)}
+                  className="bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] text-xs font-bold px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
+                >
+                  Order this
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  {editMode && onToggleStatus ? (
+                    <button
+                      type="button"
+                      onClick={() => onToggleStatus(product.id)}
+                      className={`inline-flex items-center gap-1.5 text-xs font-black px-3.5 py-1.5 rounded-full uppercase tracking-wider shadow-xs transition-colors cursor-pointer ${
+                        status === "available"
+                          ? "bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF]"
+                          : "bg-[#FFF1B5] hover:bg-[#FFF1B5]/85 text-[#1F2B20]"
+                      }`}
+                    >
+                      <span>{status === "available" ? "Available" : "Sold"}</span>
+                      <RefreshCw className="w-3 h-3 shrink-0" />
+                    </button>
+                  ) : (
+                    <span
+                      className={`text-xs font-black px-3.5 py-1.5 rounded-full uppercase tracking-wider shadow-xs ${
+                        status === "available"
+                          ? "bg-[#6F8F5F] text-[#FFFFFF]"
+                          : "bg-[#FFF1B5] text-[#1F2B20]"
+                      }`}
+                    >
+                      {status === "available" ? "Available" : "Sold"}
+                    </span>
+                  )}
+                  {status === "available" && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectProductForOrder && onSelectProductForOrder(product)}
+                      className="bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] text-xs font-bold px-3.5 py-1.5 rounded-full transition-colors cursor-pointer shadow-xs whitespace-nowrap"
+                    >
+                      Order this
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function MobileCardDeckInner({
+  products,
+  savedImages,
+  cardEdits,
+  cardFit,
+  cardStatus,
+  editMode,
+  onSelectProductForOrder,
+  onImageUpload,
+  onImageRemove,
+  onCardTextChange,
+  onSetCardFit,
+  onToggleStatus,
+  onDeleteCard,
+  onAddCard,
+  handleKeyDownNoEnter,
+  getProductField,
+  isPastCreations = false,
+  onRenderError,
+}: MobileCardDeckProps & { onRenderError?: () => void }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [dragX, setDragX] = useState(0);
   const [animating, setAnimating] = useState<"left" | "right" | "rubber" | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [measuredCardHeight, setMeasuredCardHeight] = useState<number>(555);
+  const topCardRef = useRef<HTMLElement | null>(null);
+
+  // 2. Re-render whenever products, photos, or edits finish loading or change
+  const [, setForceUpdate] = useState(0);
+  useEffect(() => {
+    setForceUpdate((prev) => prev + 1);
+  }, [products, savedImages, editMode, cardFit, cardStatus, cardEdits]);
+
+  // 3. Measure top card height so container is explicitly card height + 36px and never collapses
+  useEffect(() => {
+    const updateCardHeight = () => {
+      if (topCardRef.current) {
+        const h = topCardRef.current.offsetHeight;
+        if (h && h > 200) {
+          setMeasuredCardHeight(h);
+        }
+      }
+    };
+    updateCardHeight();
+    const timer = setTimeout(updateCardHeight, 60);
+    window.addEventListener("resize", updateCardHeight);
+    return () => {
+      window.removeEventListener("resize", updateCardHeight);
+      clearTimeout(timer);
+    };
+  }, [products, savedImages, cardEdits, currentIndex]);
 
   useEffect(() => {
-    if (currentIndex >= products.length) {
+    if (products.length > 0 && currentIndex >= products.length) {
       setCurrentIndex(Math.max(0, products.length - 1));
     }
   }, [products.length, currentIndex]);
@@ -1278,6 +1559,8 @@ function MobileCardDeck({
         zIndex: 30,
         boxShadow: "0 18px 30px rgba(60, 45, 20, 0.16)",
         transition: "transform 250ms ease-out, opacity 250ms ease-out",
+        visibility: "visible",
+        pointerEvents: "auto",
       };
     }
     if (rel === 1) {
@@ -1287,6 +1570,8 @@ function MobileCardDeck({
         zIndex: 20,
         boxShadow: "0 18px 30px rgba(60, 45, 20, 0.12)",
         transition: "transform 250ms ease-out, opacity 250ms ease-out",
+        visibility: "visible",
+        pointerEvents: "none",
       };
     }
     if (rel === 2) {
@@ -1296,15 +1581,23 @@ function MobileCardDeck({
         zIndex: 10,
         boxShadow: "0 18px 30px rgba(60, 45, 20, 0.08)",
         transition: "transform 250ms ease-out, opacity 250ms ease-out",
+        visibility: "visible",
+        pointerEvents: "none",
       };
     }
 
-    return { opacity: 0, pointerEvents: "none" };
+    return {
+      transform: "translate(0, 24px) scale(0.85)",
+      opacity: 0,
+      zIndex: 0,
+      pointerEvents: "none",
+      visibility: "hidden",
+    };
   };
 
   return (
     <div
-      className="w-full flex flex-col items-center select-none py-2 outline-none"
+      className="w-full flex flex-col items-center select-none py-2 outline-none overflow-visible"
       style={{ touchAction: "pan-y" }}
       tabIndex={0}
       onKeyDown={handleKeyDown}
@@ -1314,14 +1607,19 @@ function MobileCardDeck({
         Piece {currentIndex + 1} of {products.length}
       </div>
 
-      {/* Deck stack container */}
+      {/* Deck stack container: explicit height equal to card + 36px, never collapses */}
       <div
         ref={deckRef}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        className="relative w-[min(84vw,340px)] min-h-[530px] sm:min-h-[550px] cursor-grab active:cursor-grabbing"
+        style={{
+          height: `${measuredCardHeight + 36}px`,
+          minHeight: `${measuredCardHeight + 36}px`,
+          touchAction: "pan-y",
+        }}
+        className="relative w-[min(84vw,340px)] cursor-grab active:cursor-grabbing overflow-visible select-none"
       >
         {products.map((product, idx) => {
           const photoUrl = savedImages[product.id] || product.image;
@@ -1334,9 +1632,10 @@ function MobileCardDeck({
 
           return (
             <article
+              ref={isTopCard ? (topCardRef as any) : undefined}
               key={product.id}
               style={cardStyle}
-              className="absolute inset-x-0 top-0 bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] will-change-transform relative"
+              className="absolute inset-x-0 top-0 bg-[#FDFCF6] rounded-[20px] p-4 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] will-change-transform"
             >
               {/* Delete card button (top-right corner in edit mode) */}
               {editMode && isTopCard && onDeleteCard && (
@@ -1535,6 +1834,84 @@ function MobileCardDeck({
 }
 
 /* ==========================================================================
+   MOBILE CARD DECK ERROR BOUNDARY & WRAPPER
+   Ensures single source of truth, reactivity to async data, and fallback on error
+   ========================================================================== */
+
+interface MobileDeckErrorBoundaryProps {
+  fallback: React.ReactNode;
+  children: React.ReactNode;
+  resetKey: string | number;
+}
+
+interface MobileDeckErrorBoundaryState {
+  hasError: boolean;
+}
+
+class MobileDeckErrorBoundary extends React.Component<
+  MobileDeckErrorBoundaryProps,
+  MobileDeckErrorBoundaryState
+> {
+  constructor(props: MobileDeckErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any, info: any) {
+    console.error("MobileCardDeck rendering error caught by boundary, falling back to scroll-snap row:", error, info);
+  }
+
+  componentDidUpdate(prevProps: MobileDeckErrorBoundaryProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
+export function MobileCardDeck(props: MobileCardDeckProps) {
+  const [renderError, setRenderError] = useState(false);
+
+  // Re-enable deck when data or edits change
+  useEffect(() => {
+    setRenderError(false);
+  }, [props.products, props.savedImages, props.cardEdits, props.cardFit, props.cardStatus, props.editMode]);
+
+  // Fallback if cards array is missing or empty
+  if (!props.products || props.products.length === 0) {
+    return <MobileScrollRowFallback {...props} />;
+  }
+
+  const resetKey = `${props.products.length}-${Object.keys(props.savedImages || {}).length}-${props.editMode}-${props.isPastCreations ? "past" : "stock"}`;
+
+  return (
+    <MobileDeckErrorBoundary
+      resetKey={resetKey}
+      fallback={<MobileScrollRowFallback {...props} />}
+    >
+      {renderError ? (
+        <MobileScrollRowFallback {...props} />
+      ) : (
+        <MobileCardDeckInner
+          {...props}
+          onRenderError={() => setRenderError(true)}
+        />
+      )}
+    </MobileDeckErrorBoundary>
+  );
+}
+
+/* ==========================================================================
    MAIN APPLICATION
    ========================================================================== */
 
@@ -1661,6 +2038,27 @@ export default function App() {
   const [orderNotes, setOrderNotes] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [whatsappStatusNote, setWhatsappStatusNote] = useState<string | null>(null);
+  const [orderReminderOpen, setOrderReminderOpen] = useState(false);
+  const [spamWebsite, setSpamWebsite] = useState("");
+  const reminderContinueBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // Manage Escape and focus for the order reminder dialog
+  useEffect(() => {
+    if (!orderReminderOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOrderReminderOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    const timer = setTimeout(() => {
+      reminderContinueBtnRef.current?.focus();
+    }, 50);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      clearTimeout(timer);
+    };
+  }, [orderReminderOpen]);
 
   // Horizontal scroll refs for Shop rows
   const inStockScrollRef = useRef<HTMLDivElement>(null);
@@ -2046,7 +2444,7 @@ export default function App() {
     addToBasket(product);
   };
 
-  // WhatsApp send handler
+  // Order submit handler: validates form and opens reminder dialog
   const handleOrderSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -2058,12 +2456,55 @@ export default function App() {
     }
     setNameError(null);
 
+    // Show reminder dialog before opening WhatsApp
+    setOrderReminderOpen(true);
+  };
+
+  // Called when user taps "Got it, continue to WhatsApp" in the reminder dialog
+  const handleConfirmAndSendWhatsApp = () => {
+    setOrderReminderOpen(false);
+
+    // 2. SAVE ORDERS TO GOOGLE SHEETS (if configured, not spam, rate-limited to 1 per 30s)
+    if (GOOGLE_SCRIPT_URL && !spamWebsite.trim()) {
+      try {
+        const now = Date.now();
+        const lastPostStr = typeof window !== "undefined" ? localStorage.getItem("ms_sage_last_order_post") : null;
+        const lastPost = lastPostStr ? parseInt(lastPostStr, 10) : 0;
+        if (!lastPost || now - lastPost >= 30000) {
+          try {
+            localStorage.setItem("ms_sage_last_order_post", String(now));
+          } catch {
+            // ignore localStorage quota error
+          }
+
+          const params = new URLSearchParams();
+          params.append("name", orderCustomerName.trim());
+          params.append("orderType", orderType);
+          params.append("items", selectedItemName || "");
+          params.append("notes", orderNotes.trim());
+          params.append("website", ""); // Always empty string in POST
+
+          fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            mode: "no-cors",
+            keepalive: true,
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: params,
+          }).catch(() => {
+            // Never block the order, show no error
+          });
+        }
+      } catch {
+        // Never block the order, show no error
+      }
+    }
+
     const lines: string[] = ["Hi ms.sage creates! I'd like to place an order."];
     lines.push(`Name: ${orderCustomerName.trim()}`);
     lines.push(`Order type: ${orderType}`);
 
-    // 4. In WhatsApp message, replace single "Item:" with "Items:" listing the basket
-    // e.g. "Items: 2x Lorem Ipsum Dolor, 1x Lorem Ipsum Dolor". If empty, leave out.
     if (basket.length > 0) {
       const itemsList = basket
         .filter((item) => item.quantity > 0)
@@ -2086,8 +2527,16 @@ export default function App() {
     setWhatsappStatusNote("WhatsApp is opening. Tap Send there to finish your order.");
   };
 
+  // Called when user taps "Read the steps first" in the reminder dialog
+  const handleReadStepsFirst = () => {
+    setOrderReminderOpen(false);
+    setActiveSection("info");
+    const el = document.getElementById("info");
+    el?.scrollIntoView({ behavior: "smooth" });
+  };
+
   const heroImage = savedImages["hero_featured"] || defaultHeroImage;
-  const [heroAspectRatio, setHeroAspectRatio] = useState<number>(1024 / 572);
+  const [heroAspectRatio, setHeroAspectRatio] = useState<number>(1);
 
   useEffect(() => {
     if (!heroImage) return;
@@ -2428,66 +2877,40 @@ export default function App() {
             Desktop: max-h-[calc(100dvh-220px)] min-h-[260px]
             Phones: full width with natural height
           - Background color detected from edge pixels (fallback #D5E2D4)
-          - No slow zoom
-          - "Order Now" button sits centered just below the image inside bottom padding
-          - Edit mode: "Change" & "Remove" at bottom-left of hero
+      {/* ---------------------------------------------------------------------
+          FULL-WIDTH HERO FEATURED IMAGE
+          - Stretches to fill the entire background edge-to-edge and top-to-bottom
+          - Extends till the bottom border leading into 'Fresh Off the Hook'
+          - 'Order Now' button is seated comfortably inside the hero background
+          - Pastel yarn artwork kept consistent, round, sharp, and clear
           --------------------------------------------------------------------- */}
       <section
         aria-label="Hero Showcase"
         style={{ backgroundColor: "#EFEFEA" }}
-        className="relative w-full -mt-[68px] sm:-mt-[72px] md:-mt-[80px] pt-[76px] sm:pt-[80px] md:pt-[88px] pb-[56px] overflow-hidden group rounded-none flex flex-col items-center justify-center"
+        className="relative w-full -mt-[68px] sm:-mt-[72px] md:-mt-[80px] pt-[84px] sm:pt-[92px] md:pt-[104px] pb-10 sm:pb-12 md:pb-14 overflow-hidden group rounded-none flex flex-col items-center justify-between min-h-[520px] sm:min-h-[580px] md:min-h-[620px] lg:min-h-[calc(100dvh-120px)] border-b border-[#1F2B20]/15"
       >
+        {/* Full-bleed background artwork filling the entire section edge-to-edge */}
         {heroImage ? (
-          <div className="w-full relative">
-            {/* --- PHONE (<= 768px: md:hidden) --- */}
-            {/* Square container (aspect-ratio 1 / 1) at width 100%, object-fit: cover, object-position: center */}
-            <div className="md:hidden w-full aspect-square relative overflow-hidden flex items-center justify-center">
+          <div className="absolute inset-0 w-full h-full pointer-events-none select-none overflow-hidden z-0">
+            <picture className="w-full h-full block">
+              <source
+                media="(min-width: 769px)"
+                srcSet={savedImages["hero_featured"] || defaultHeroImageWide}
+              />
               <img
-                src={heroImage}
+                src={savedImages["hero_featured"] || defaultHeroImageSquare}
                 alt="Featured crochet showcase"
+                referrerPolicy="no-referrer"
                 className="w-full h-full object-cover object-center block"
                 style={{
                   WebkitMaskImage: "linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
                   maskImage: "linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
                 }}
               />
-            </div>
-
-            {/* --- DESKTOP (> 768px: hidden md:flex) --- */}
-            <div className="hidden md:flex w-full relative overflow-hidden items-center justify-center">
-              {isNarrow ? (
-                /* Narrow fallback (< 1.8:1): centered at natural ratio, height max 700px / calc(100dvh-220px), 90px side fade */
-                <img
-                  src={heroImage}
-                  alt="Featured crochet showcase"
-                  className="w-auto max-w-full max-h-[min(calc(100dvh-220px),700px)] object-contain object-center block"
-                  style={{
-                    aspectRatio: heroAspectRatio,
-                    WebkitMaskImage:
-                      "linear-gradient(to right, transparent 0px, black 90px, black calc(100% - 90px), transparent 100%), linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
-                    maskImage:
-                      "linear-gradient(to right, transparent 0px, black 90px, black calc(100% - 90px), transparent 100%), linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
-                    WebkitMaskComposite: "destination-in",
-                    maskComposite: "intersect",
-                  }}
-                />
-              ) : (
-                /* Full-width banner: width 100%, natural aspect ratio, object-fit: cover, max-height calc(100dvh-180px), yarn reaches edges */
-                <img
-                  src={heroImage}
-                  alt="Featured crochet showcase"
-                  className="w-full max-h-[calc(100dvh-180px)] object-cover object-center block"
-                  style={{
-                    aspectRatio: heroAspectRatio,
-                    WebkitMaskImage: "linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
-                    maskImage: "linear-gradient(to bottom, transparent 0px, black 24px, black 100%)",
-                  }}
-                />
-              )}
-            </div>
+            </picture>
           </div>
         ) : editMode ? (
-          <div className="w-full max-w-[800px] h-[360px] md:h-[calc(100dvh-220px)] md:min-h-[260px] flex items-center justify-center bg-[#E9E3D3] border-2 border-dashed border-[#6F8F5F]/50 mx-auto rounded-3xl">
+          <div className="relative z-10 w-full max-w-[800px] h-[360px] md:h-[calc(100dvh-220px)] md:min-h-[260px] flex items-center justify-center bg-[#E9E3D3] border-2 border-dashed border-[#6F8F5F]/50 mx-auto rounded-3xl">
             <label className="flex flex-col items-center justify-center gap-3.5 cursor-pointer group/upload p-8 rounded-3xl">
               <input
                 type="file"
@@ -2508,19 +2931,22 @@ export default function App() {
             </label>
           </div>
         ) : (
-          <div className="w-full max-w-[800px] h-[360px] md:h-[calc(100dvh-220px)] md:min-h-[260px] bg-[#E9E3D3] border-2 border-dashed border-[#6F8F5F]/50 mx-auto rounded-3xl" />
+          <div className="relative z-10 w-full max-w-[800px] h-[360px] md:h-[calc(100dvh-220px)] md:min-h-[260px] bg-[#E9E3D3] border-2 border-dashed border-[#6F8F5F]/50 mx-auto rounded-3xl" />
         )}
 
-        {/* "Order Now" button: 40px space above (mt-10) and 56px space below (from hero's pb-[56px]) */}
-        <div className="mt-10 flex justify-center z-20">
+        {/* Flexible spacer pushing the button toward the bottom border */}
+        <div className="flex-1 w-full pointer-events-none" />
+
+        {/* "Order Now" button: seated comfortably inside the hero background right before the bottom border */}
+        <div className="relative z-20 flex justify-center w-full px-4">
           <a
             href="#order"
             onClick={() => setActiveSection("order")}
             aria-label="Order Now"
-            className={`inline-flex items-center justify-center font-bold text-base md:text-lg px-8 sm:px-10 py-3.5 sm:py-4 rounded-full transition-all duration-250 ease-out whitespace-nowrap cursor-pointer ${
+            className={`inline-flex items-center justify-center font-bold text-base md:text-lg px-8 sm:px-10 py-3.5 sm:py-4 rounded-full transition-all duration-300 ease-out whitespace-nowrap cursor-pointer ${
               isScrolled
-                ? "bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] border-2 border-transparent shadow-[0_10px_25px_rgba(60,45,20,0.12)] backdrop-blur-none"
-                : "bg-white/12 backdrop-blur-[6px] border-2 border-[#1F2B20] text-[#1F2B20] hover:bg-[#1F2B20] hover:text-[#FFFFFF] shadow-none"
+                ? "bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] border-2 border-[#6F8F5F] shadow-[0_10px_25px_rgba(60,45,20,0.16)] backdrop-blur-none"
+                : "bg-transparent border-2 border-[#1F2B20] text-[#1F2B20] hover:bg-[#1F2B20] hover:text-[#FFFFFF] shadow-none"
             }`}
           >
             Order Now
@@ -2529,7 +2955,7 @@ export default function App() {
 
         {/* Edit mode: Change and Remove buttons at bottom-left of hero */}
         {editMode && heroImage && (
-          <div className="absolute bottom-5 left-5 z-20 flex items-center gap-2">
+          <div className="absolute bottom-5 left-5 z-30 flex items-center gap-2">
             <label className="bg-[#FFFFFF] hover:bg-[#EEE7D6] text-[#1F2B20] text-xs font-bold px-3.5 py-1.5 rounded-full cursor-pointer shadow-md transition-colors">
               <input
                 type="file"
@@ -2745,6 +3171,7 @@ export default function App() {
             {/* Mobile Stacked Card Deck (<= 768px only) */}
             <ScrollReveal className="w-full md:hidden">
               <MobileCardDeck
+                key={`stock-${inStockProducts.length}-${Object.keys(savedImages).length}-${editMode}`}
                 products={inStockProducts}
                 savedImages={savedImages}
                 cardEdits={cardEdits}
@@ -2965,6 +3392,7 @@ export default function App() {
             {/* Mobile Stacked Card Deck (<= 768px only) */}
             <ScrollReveal className="w-full md:hidden">
               <MobileCardDeck
+                key={`past-${pastCreationsProducts.length}-${Object.keys(savedImages).length}-${editMode}`}
                 products={pastCreationsProducts}
                 isPastCreations
                 savedImages={savedImages}
@@ -3025,7 +3453,10 @@ export default function App() {
                   ms.sage creates is an independent slow-fiber practice rooted in Nairobi, Kenya, celebrating the meditative artistry of intentional hand-stitching.
                 </p>
                 <p>
-                  Every garment, bucket hat, and checkered bag is made stitch by stitch to celebrate individual expression and enduring comfort. Rather than mass-producing, we craft small-batch drops and made-to-measure pieces designed to seamlessly fit your daily lifestyle.
+                  For now, we're focusing on bags. Every piece is made stitch by stitch to celebrate individual expression and enduring comfort. Rather than mass-producing, we craft small-batch drops and made-to-measure pieces designed to fit seamlessly into your daily life.
+                </p>
+                <p>
+                  We'll be expanding to more pieces later, so stay tuned.
                 </p>
               </div>
 
@@ -3068,89 +3499,30 @@ export default function App() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {/* STEP 1 */}
-            <ScrollReveal staggerIndex={0}>
-              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
-                <div>
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
-                    STEP 1
+            {PROCESS_STEPS.map((stepItem, idx) => (
+              <ScrollReveal key={stepItem.id} staggerIndex={idx}>
+                <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
+                  <div>
+                    <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
+                      {stepItem.step}
+                    </div>
+                    <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
+                      {stepItem.title}
+                    </h3>
+                    <p className="text-[16px] text-[#1F2B20]/80 leading-relaxed">
+                      {stepItem.text}
+                    </p>
                   </div>
-                  <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
-                    Pick or Pitch
-                  </h3>
-                  <p className="text-[16px] text-[#1F2B20]/80 leading-relaxed">
-                    Choose from our Featured Work or share a dream design or reference image. I'll let you know if I can bring it to life.
-                  </p>
-                </div>
-                <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
-                  <span>Inspo &amp; Sketches</span>
-                  <span className="w-2 h-2 rounded-full bg-[#6F8F5F]" />
-                </div>
-              </div>
-            </ScrollReveal>
-
-            {/* STEP 2 */}
-            <ScrollReveal staggerIndex={1}>
-              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
-                <div>
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
-                    STEP 2
+                  <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
+                    <span>{stepItem.badgeLabel}</span>
+                    <span
+                      className="w-2 h-2 rounded-full"
+                      style={{ backgroundColor: stepItem.dotColor }}
+                    />
                   </div>
-                  <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
-                    Share Details &amp; Fit
-                  </h3>
-                  <p className="text-[16px] text-[#1F2B20]/80 leading-relaxed">
-                    Tap Order Now, note any favorites, and share your sizing details.
-                  </p>
                 </div>
-                <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
-                  <span>Custom Sizing</span>
-                  <span className="w-2 h-2 rounded-full bg-[#F7B8CB]" />
-                </div>
-              </div>
-            </ScrollReveal>
-
-            {/* STEP 3 */}
-            <ScrollReveal staggerIndex={2}>
-              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
-                <div>
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
-                    STEP 3
-                  </div>
-                  <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
-                    Secure Your Slot
-                  </h3>
-                  <p className="text-[16px] text-[#1F2B20]/80 leading-relaxed">
-                    Confirm your order with a 50% deposit so we can start crafting it.
-                  </p>
-                </div>
-                <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
-                  <span>Deposit Confirms Slot</span>
-                  <span className="w-2 h-2 rounded-full bg-[#6F8F5F]" />
-                </div>
-              </div>
-            </ScrollReveal>
-
-            {/* STEP 4 */}
-            <ScrollReveal staggerIndex={3}>
-              <div className="bg-[#FDFCF6] rounded-[20px] p-6 sm:p-7 flex flex-col justify-between shadow-[0_8px_24px_rgba(60,45,20,0.10)] h-full">
-                <div>
-                  <div className="text-[13px] font-bold tracking-widest uppercase text-[#6F8F5F] mb-3">
-                    STEP 4
-                  </div>
-                  <h3 className="font-heading text-2xl text-[#1F2B20] mb-3 leading-snug tracking-[0.02em]">
-                    Made with Care &amp; Delivered
-                  </h3>
-                  <p className="text-[16px] text-[#1F2B20]/80 leading-relaxed">
-                    We'll message you when your order is complete and again just before it's dispatched.
-                  </p>
-                </div>
-                <div className="mt-6 pt-4 border-t border-[rgba(60,45,20,0.08)] flex items-center justify-between text-xs text-[#1F2B20]/60 font-semibold">
-                  <span>Pick Up Mtaani</span>
-                  <span className="w-2 h-2 rounded-full bg-[#E0764A]" />
-                </div>
-              </div>
-            </ScrollReveal>
+              </ScrollReveal>
+            ))}
           </div>
         </section>
 
@@ -3234,6 +3606,20 @@ export default function App() {
                     }`}
                     noValidate
                   >
+                    {/* Spam trap honeypot (visually hidden) */}
+                    <div className="hidden" aria-hidden="true" style={{ display: "none" }}>
+                      <label htmlFor="website">Website</label>
+                      <input
+                        id="website"
+                        name="website"
+                        type="text"
+                        tabIndex={-1}
+                        autoComplete="off"
+                        value={spamWebsite}
+                        onChange={(e) => setSpamWebsite(e.target.value)}
+                      />
+                    </div>
+
                     {/* Customer Name */}
                     <div>
                       <label
@@ -3365,6 +3751,10 @@ export default function App() {
                             : "Orders are currently closed"}
                         </span>
                       </button>
+
+                      <p className="text-center text-[12px] text-[#1F2B20]/60 mt-2 font-medium">
+                        By sending, you agree that we save your order details to follow up on your order.
+                      </p>
 
                       {ordersOpen && whatsappStatusNote ? (
                         <p className="text-center text-xs text-[#6F8F5F] font-bold mt-2.5">
@@ -3664,6 +4054,94 @@ export default function App() {
               </div>
             )}
           </aside>
+        </div>
+      )}
+
+      {/* Read-the-steps Reminder Dialog before WhatsApp */}
+      {orderReminderOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-[#1F2B20]/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 transition-opacity duration-200"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reminder-dialog-title"
+          aria-describedby="reminder-dialog-intro"
+          onClick={() => setOrderReminderOpen(false)}
+        >
+          <div
+            className="bg-[#FDFCF6] text-[#1F2B20] w-full sm:max-w-xl max-h-[85dvh] flex flex-col rounded-t-[28px] sm:rounded-[28px] shadow-[0_24px_60px_rgba(31,43,32,0.25)] border border-[rgba(31,43,32,0.08)] overflow-hidden relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="p-6 sm:p-7 pb-4 flex items-start justify-between border-b border-[rgba(31,43,32,0.06)] shrink-0">
+              <div>
+                <h3
+                  id="reminder-dialog-title"
+                  className="font-heading text-2xl sm:text-3xl text-[#1F2B20] tracking-[0.02em] leading-tight mb-1"
+                >
+                  Before you send your order
+                </h3>
+                <p
+                  id="reminder-dialog-intro"
+                  className="text-sm sm:text-base text-[#1F2B20]/80 leading-snug"
+                >
+                  Please read the steps below so you know what to expect.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOrderReminderOpen(false)}
+                aria-label="Close dialog"
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#EEE7D6]/70 hover:bg-[#EEE7D6] flex items-center justify-center text-[#1F2B20] shrink-0 ml-3 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+            </div>
+
+            {/* Scrollable steps from shared PROCESS_STEPS array */}
+            <div className="overflow-y-auto p-6 sm:p-7 space-y-3.5 flex-1">
+              {PROCESS_STEPS.map((stepItem) => (
+                <div
+                  key={stepItem.id}
+                  className="bg-[#F5EFE3]/70 rounded-2xl p-4 border border-[rgba(31,43,32,0.06)] flex flex-col"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] font-bold tracking-widest uppercase text-[#6F8F5F]">
+                      {stepItem.step}
+                    </span>
+                    <span
+                      className="w-2 h-2 rounded-full"
+                      style={{ backgroundColor: stepItem.dotColor }}
+                    />
+                  </div>
+                  <h4 className="font-heading text-lg sm:text-xl text-[#1F2B20] leading-snug mb-1">
+                    {stepItem.title}
+                  </h4>
+                  <p className="text-sm text-[#1F2B20]/80 leading-relaxed">
+                    {stepItem.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Footer action buttons */}
+            <div className="p-6 sm:p-7 pt-4 border-t border-[rgba(31,43,32,0.06)] bg-[#FDFCF6] flex flex-col gap-2 shrink-0">
+              <button
+                ref={reminderContinueBtnRef}
+                type="button"
+                onClick={handleConfirmAndSendWhatsApp}
+                className="w-full bg-[#6F8F5F] hover:bg-[#5E7C4F] text-[#FFFFFF] font-bold text-base py-3.5 px-6 rounded-full transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>Got it, continue to WhatsApp</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleReadStepsFirst}
+                className="text-sm font-bold text-[#6F8F5F] hover:text-[#5E7C4F] hover:underline transition-colors py-1.5 cursor-pointer text-center"
+              >
+                Read the steps first
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
