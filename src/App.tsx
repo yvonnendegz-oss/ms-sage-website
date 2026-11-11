@@ -2089,7 +2089,7 @@ export default function App() {
 
   // Order form state
   const [orderCustomerName, setOrderCustomerName] = useState("");
-  const [orderType, setOrderType] = useState<string>("In-stock piece");
+  const [orderType, setOrderType] = useState<string>("Displayed piece");
   const [selectedItemName, setSelectedItemName] = useState<string | null>(null);
   const [orderNotes, setOrderNotes] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
@@ -2284,13 +2284,37 @@ export default function App() {
                 };
               });
 
-              // Ensure Maxi clutch is present in in-stock
-              if (!mapped.some((p: Product) => p.id === "prod-5" || p.name?.toLowerCase().includes("maxi clutch"))) {
-                const maxiClutchDefault = PRODUCTS.find((dp) => dp.id === "prod-5");
-                if (maxiClutchDefault) mapped.push(maxiClutchDefault);
+              // Deduplicate any duplicate cards (e.g. Maxi clutch in in-stock)
+              const seenInStock = new Set<string>();
+              const seenPast = new Set<string>();
+              const deduped: Product[] = [];
+
+              for (const item of mapped) {
+                const normName = (item.name || "").trim().toLowerCase();
+                if (item.category === "in-stock") {
+                  if (seenInStock.has(normName)) continue;
+                  seenInStock.add(normName);
+                } else {
+                  if (seenPast.has(normName)) continue;
+                  seenPast.add(normName);
+                }
+                deduped.push(item);
               }
 
-              return mapped;
+              // Ensure Maxi clutch is present exactly once in in-stock
+              if (!seenInStock.has("maxi clutch")) {
+                const maxiClutchDefault = PRODUCTS.find((dp) => dp.id === "prod-5");
+                if (maxiClutchDefault) deduped.push(maxiClutchDefault);
+              }
+
+              // Update storage with deduplicated list if needed
+              if (deduped.length !== parsed.length) {
+                try {
+                  localStorage.setItem("ms_sage_products_custom", JSON.stringify(deduped));
+                } catch {}
+              }
+
+              return deduped;
             }
           }
         }
@@ -2499,8 +2523,27 @@ export default function App() {
     showToast("Card deleted");
   };
 
-  const inStockProducts = products.filter((p) => p.category === "in-stock");
-  const pastCreationsProducts = products.filter((p) => p.category === "past-creation");
+  const inStockProducts = React.useMemo(() => {
+    const list = products.filter((p) => p.category === "in-stock");
+    const seen = new Set<string>();
+    return list.filter((p) => {
+      const norm = (p.name || "").trim().toLowerCase();
+      if (seen.has(norm)) return false;
+      seen.add(norm);
+      return true;
+    });
+  }, [products]);
+
+  const pastCreationsProducts = React.useMemo(() => {
+    const list = products.filter((p) => p.category === "past-creation");
+    const seen = new Set<string>();
+    return list.filter((p) => {
+      const norm = (p.name || "").trim().toLowerCase();
+      if (seen.has(norm)) return false;
+      seen.add(norm);
+      return true;
+    });
+  }, [products]);
 
   // Helper to get product name using current (edited) card text
   const getItemName = (productId: string): string => {
@@ -3785,7 +3828,7 @@ export default function App() {
                           style={{ fontSize: "16px", paddingRight: "48px" }}
                           className="w-full bg-[#F5EFE3] border border-[rgba(31,43,32,0.12)] rounded-xl pl-4 py-3 text-[16px] text-[#1F2B20] focus:outline-none focus:ring-2 focus:ring-[#6F8F5F] transition-all appearance-none cursor-pointer disabled:cursor-not-allowed"
                         >
-                          <option value="In-stock piece">In-stock piece</option>
+                          <option value="Displayed piece">Displayed piece</option>
                           <option value="Custom order (my own idea)">
                             Custom order (my own idea)
                           </option>
@@ -3799,7 +3842,7 @@ export default function App() {
                       </div>
 
                       {/* Display basket items when user has pieces in basket */}
-                      {basket.length > 0 && orderType === "In-stock piece" ? (
+                      {basket.length > 0 && (orderType === "Displayed piece" || orderType === "In-stock piece") ? (
                         <div className="mt-2 text-xs bg-[#EEE7D6] text-[#1F2B20] px-3.5 py-2 rounded-lg flex items-center justify-between font-medium gap-2">
                           <span className="truncate">
                             Basket items: <strong>{basket.map((i) => `${i.quantity}x ${getItemName(i.productId)}`).join(", ")}</strong>
@@ -3812,7 +3855,7 @@ export default function App() {
                             View basket
                           </button>
                         </div>
-                      ) : selectedItemName && orderType === "In-stock piece" ? (
+                      ) : selectedItemName && (orderType === "Displayed piece" || orderType === "In-stock piece") ? (
                         <div className="mt-2 text-xs bg-[#EEE7D6] text-[#1F2B20] px-3.5 py-1.5 rounded-lg flex items-center justify-between font-medium">
                           <span>
                             Selected item: <strong>{selectedItemName}</strong>
@@ -3842,7 +3885,7 @@ export default function App() {
                         disabled={!ordersOpen}
                         value={orderNotes}
                         onChange={(e) => setOrderNotes(e.target.value)}
-                        placeholder="Share any ideas, measurements, deadlines, and other preferences..."
+                        placeholder="share preferred colours, pattern, ideas, measurements and other preferences..."
                         className="w-full bg-[#F5EFE3] border border-[rgba(31,43,32,0.12)] rounded-xl p-4 text-base text-[#1F2B20] placeholder:text-[#1F2B20]/40 focus:outline-none focus:ring-2 focus:ring-[#6F8F5F] transition-all resize-none disabled:cursor-not-allowed"
                       />
                       <p className="text-xs text-[#1F2B20]/70 mt-1.5 font-medium">
@@ -4170,7 +4213,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setCartOpen(false);
-                    setOrderType("In-stock piece");
+                    setOrderType("Displayed piece");
                     setActiveSection("order");
                     const orderSection = document.getElementById("order");
                     if (orderSection) {
