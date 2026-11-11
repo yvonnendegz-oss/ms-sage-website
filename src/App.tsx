@@ -25,14 +25,14 @@ import {
 import defaultHeroImage from "./assets/hero_featured.png";
 import defaultHeroImageWide from "./assets/hero_featured_wide.jpg";
 import defaultHeroImageSquare from "./assets/hero_featured_square.jpg";
-import bagMarketTote from "./assets/products/bag_market_tote.jpg";
-import bagSageHobo from "./assets/products/bag_sage_hobo.jpg";
-import bagMiniCrossbody from "./assets/products/bag_mini_crossbody.jpg";
-import bagTerracottaRibbed from "./assets/products/bag_terracotta_ribbed.jpg";
-import bagBlushWristlet from "./assets/products/bag_blush_wristlet.jpg";
-import bagCheckeredTote from "./assets/products/bag_checkered_tote.jpg";
-import bagCrescentTwine from "./assets/products/bag_crescent_twine.jpg";
-import bagDianiNet from "./assets/products/bag_diani_net.jpg";
+import photo1MiniTriangleTote from "./assets/products/photo_1_mini_triangle_tote.jpg";
+import photo2MidiTriangleTote from "./assets/products/photo_2_midi_triangle_tote.jpg";
+import photo3ShopperBag from "./assets/products/photo_3_shopper_bag.jpg";
+import photo4MidiClutch from "./assets/products/photo_4_midi_clutch.jpg";
+import photo5MaxiClutch from "./assets/products/photo_5_maxi_clutch.jpg";
+import photo6PinkVelvetShorts from "./assets/products/photo_6_pink_velvet_shorts.jpg";
+import photo7OffShoulderTop from "./assets/products/photo_7_off_shoulder_top.jpg";
+import photo8MaxiTote from "./assets/products/photo_8_maxi_tote.jpg";
 
 // Google Apps Script Web App URL for logging orders to Google Sheets
 // Set VITE_GOOGLE_SCRIPT_URL in .env or local storage
@@ -78,7 +78,7 @@ export const PROCESS_STEPS: ProcessStepItem[] = [
         <strong style={{ fontWeight: 800 }} className="font-extrabold text-[#1F2B20]">
           50% deposit
         </strong>{" "}
-        so we can start crafting it.
+        so we can start crafting it. An additional delivery fee will be communicated as per your preference [delivery or pick-up].
       </>
     ),
     badgeLabel: "Deposit Confirms Slot",
@@ -108,81 +108,98 @@ export interface Product {
   image?: string;
 }
 
+export const DEFAULT_CARD_FIT: Record<string, "fill" | "fit"> = {
+  "prod-1": "fit",
+  "prod-2": "fit",
+  "prod-3": "fit",
+  "prod-4": "fit",
+  "prod-5": "fit",
+  "prod-6": "fit",
+  "prod-7": "fit",
+  "prod-8": "fit",
+};
+
+export const DEFAULT_CARD_STATUS: Record<string, "sold" | "available"> = {
+  "prod-6": "available",
+  "prod-7": "sold",
+  "prod-8": "sold",
+};
+
 export const PRODUCTS: Product[] = [
   // --- ROW 1: RECENT CREATIONS (In Stock) ---
   {
     id: "prod-1",
-    name: "Nairobi Market Tote",
+    name: "Mini triangle tote",
     category: "in-stock",
-    label: "TOTE BAG",
-    description: "Handcrafted chunky cotton cord tote with structured ribbed double handles and organic texture.",
-    price: "KES 5,800",
-    image: bagMarketTote,
+    label: "TOTE",
+    description: "made to perfection with thick stitches holding it together and an adjutable strap",
+    price: "KES 2,500",
+    image: photo1MiniTriangleTote,
   },
   {
     id: "prod-2",
-    name: "Kikapu Slouchy Hobo",
+    name: "Midi triangle tote",
     category: "in-stock",
-    label: "HOBO BAG",
-    description: "Meditation in stitches: relaxed everyday slouch bag in muted sage green chunky wool yarn.",
-    price: "KES 4,500",
-    image: bagSageHobo,
+    label: "TOTE",
+    description: "A perfect mix of bold and subtle",
+    price: "KES 4,300",
+    image: photo2MidiTriangleTote,
   },
   {
     id: "prod-3",
-    name: "Savannah Mini Crossbody",
+    name: "Shopper bag",
     category: "in-stock",
-    label: "CROSSBODY",
-    description: "Compact textured crochet pouch in buttercup yellow and ecru with braided shoulder strap.",
-    price: "KES 3,200",
-    image: bagMiniCrossbody,
+    label: "Bag",
+    description: "compact crochet piece customizable to your preferred colour",
+    price: "KES 2,550",
+    image: photo3ShopperBag,
   },
   {
     id: "prod-4",
-    name: "Acacia Ribbed Shoulder Bag",
+    name: "Midi clutch",
     category: "in-stock",
-    label: "SHOULDER BAG",
-    description: "Sculptural ribbed crochet in rich terracotta rust cord with comfortable wide strap.",
-    price: "KES 4,800",
-    image: bagTerracottaRibbed,
+    label: "CLUTCH",
+    description: "perfect for dressing up!",
+    price: "KES 2,450",
+    image: photo4MidiClutch,
+  },
+  {
+    id: "prod-5",
+    name: "Maxi clutch",
+    category: "in-stock",
+    label: "CLUTCH",
+    description: "just what you need, a dose of chic!",
+    price: "KES 3,850",
+    image: photo5MaxiClutch,
   },
 
   // --- ROW 2: PAST CREATIONS (Archive & Inspo) ---
   {
-    id: "prod-5",
-    name: "The Mara Knot Bag",
-    category: "past-creation",
-    label: "WRISTLET",
-    description: "Japanese-inspired single-loop wristlet in soft dusty blush pink cotton yarn. Custom archival drop.",
-    price: "KES 3,600",
-    image: bagBlushWristlet,
-  },
-  {
     id: "prod-6",
-    name: "Rift Valley Checkered Tote",
+    name: "Pink velvet",
     category: "past-creation",
-    label: "TOTE BAG",
-    description: "Handcrafted two-tone checkerboard tote in forest green and warm cream squares.",
-    price: "KES 6,200",
-    image: bagCheckeredTote,
+    label: "shorts",
+    description: "summer ruffle shorts",
+    price: "KES 3,500",
+    image: photo6PinkVelvetShorts,
   },
   {
     id: "prod-7",
-    name: "Karura Crescent Moon Bag",
+    name: "off shoulder",
     category: "past-creation",
-    label: "SHOULDER BAG",
-    description: "Architectural curved crescent silhouette hand-crocheted in heavyweight natural twine.",
-    price: "KES 5,200",
-    image: bagCrescentTwine,
+    label: "TOP",
+    description: "customizable to your preferred color and pattern",
+    price: "KES 2,800",
+    image: photo7OffShoulderTop,
   },
   {
     id: "prod-8",
-    name: "Diani Summer Net Bag",
+    name: "Maxi tote",
     category: "past-creation",
-    label: "MARKET BAG",
-    description: "Airy openwork stitch mesh bag with reinforced handles, designed for beach and market days.",
-    price: "KES 2,800",
-    image: bagDianiNet,
+    label: "TOTE",
+    description: "triple the size, triple the swag!",
+    price: "KES 6,300",
+    image: photo8MaxiTote,
   },
 ];
 
@@ -239,6 +256,19 @@ async function removeImageFromStorage(key: string): Promise<void> {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     store.delete(key);
+  } catch {
+    // Silent in-memory fallback
+  }
+}
+
+async function clearAllStoredImages(): Promise<void> {
+  memoryFallbackMap.clear();
+  try {
+    const db = await openDatabase();
+    if (!db) return;
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    store.clear();
   } catch {
     // Silent in-memory fallback
   }
@@ -839,7 +869,7 @@ function ProductImageArea({
   product,
   photoUrl,
   editMode,
-  fitMode = "fill",
+  fitMode = "fit",
   onSetFit,
   onUpload,
   onRemove,
@@ -1074,7 +1104,7 @@ function MobileScrollRowFallback({
                 product={product}
                 photoUrl={photoUrl}
                 editMode={editMode}
-                fitMode={cardFit[product.id] || "fill"}
+                fitMode={cardFit[product.id] || "fit"}
                 onSetFit={(fit) => onSetCardFit(product.id, fit)}
                 onUpload={(e) => {
                   if (e.target.files?.[0]) {
@@ -1669,7 +1699,7 @@ function MobileCardDeckInner({
                   product={product}
                   photoUrl={photoUrl}
                   editMode={editMode && isTopCard}
-                  fitMode={cardFit[product.id] || "fill"}
+                  fitMode={cardFit[product.id] || "fit"}
                   onSetFit={(fit) => onSetCardFit(product.id, fit)}
                   onUpload={(e) => {
                     if (e.target.files?.[0]) {
@@ -1999,10 +2029,19 @@ export default function App() {
   >(() => {
     try {
       const saved = localStorage.getItem("ms_sage_card_edits");
-      return saved ? JSON.parse(saved) : {};
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === "object") {
+          if (parsed["prod-5"] && (parsed["prod-5"].price === "KES 3,800" || parsed["prod-5"].price === "3,800")) {
+            parsed["prod-5"].price = "KES 3,850";
+          }
+          return parsed;
+        }
+      }
     } catch {
       return {};
     }
+    return {};
   });
 
   // 2. ORDERS OPEN / CLOSED state (persisted in localStorage)
@@ -2229,13 +2268,29 @@ export default function App() {
               (p: Product) => p.name && p.name !== "Lorem Ipsum Dolor" && p.name.trim() !== ""
             );
             if (hasRealCustomItems) {
-              return parsed.map((p: Product) => {
+              const mapped: Product[] = parsed.map((p: Product): Product => {
                 const defaultProd = PRODUCTS.find((dp) => dp.id === p.id);
+                const isOffShoulder = p.id === "prod-7" || p.name?.toLowerCase().includes("off shoulder");
+                const isMaxiClutch = p.id === "prod-5" || p.name?.toLowerCase().includes("maxi clutch");
                 return {
                   ...p,
+                  category: isOffShoulder
+                    ? ("past-creation" as const)
+                    : isMaxiClutch
+                    ? ("in-stock" as const)
+                    : (p.category || defaultProd?.category || "in-stock"),
+                  price: isMaxiClutch && (p.price === "KES 3,800" || p.price === "3,800") ? "KES 3,850" : p.price,
                   image: p.image || defaultProd?.image,
                 };
               });
+
+              // Ensure Maxi clutch is present in in-stock
+              if (!mapped.some((p: Product) => p.id === "prod-5" || p.name?.toLowerCase().includes("maxi clutch"))) {
+                const maxiClutchDefault = PRODUCTS.find((dp) => dp.id === "prod-5");
+                if (maxiClutchDefault) mapped.push(maxiClutchDefault);
+              }
+
+              return mapped;
             }
           }
         }
@@ -2265,7 +2320,7 @@ export default function App() {
     } catch {
       // fallback
     }
-    return {};
+    return DEFAULT_CARD_FIT;
   });
 
   const handleSetCardFit = (productId: string, fit: "fill" | "fit") => {
@@ -2290,17 +2345,12 @@ export default function App() {
     } catch {
       // fallback
     }
-    return {
-      "prod-5": "sold",
-      "prod-6": "sold",
-      "prod-7": "sold",
-      "prod-8": "available",
-    };
+    return DEFAULT_CARD_STATUS;
   });
 
   const handleToggleCardStatus = (productId: string) => {
     setCardStatus((prev) => {
-      const current = prev[productId] || "sold";
+      const current = prev[productId] || DEFAULT_CARD_STATUS[productId] || "sold";
       const nextStatus: "sold" | "available" = current === "sold" ? "available" : "sold";
       const next: Record<string, "sold" | "available"> = { ...prev, [productId]: nextStatus };
       try {
@@ -2310,6 +2360,43 @@ export default function App() {
       }
       return next;
     });
+  };
+
+  // Reset saved edits on this device (needs second tap to confirm, clears localStorage & IndexedDB)
+  const [resetConfirming, setResetConfirming] = useState(false);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleResetSavedEdits = async () => {
+    if (!resetConfirming) {
+      setResetConfirming(true);
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = setTimeout(() => {
+        setResetConfirming(false);
+      }, 4000);
+      return;
+    }
+
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    setResetConfirming(false);
+
+    try {
+      localStorage.removeItem("ms_sage_products_custom");
+      localStorage.removeItem("ms_sage_card_edits");
+      localStorage.removeItem("ms_sage_card_fit");
+      localStorage.removeItem("ms_sage_card_status");
+    } catch {
+      // Ignore storage error
+    }
+
+    await clearAllStoredImages();
+
+    setProducts(PRODUCTS);
+    setCardEdits({});
+    setCardFit(DEFAULT_CARD_FIT);
+    setCardStatus(DEFAULT_CARD_STATUS);
+    setSavedImages({});
+
+    showToast("Saved edits reset to default");
   };
 
   // Add Card handler
@@ -3096,7 +3183,7 @@ export default function App() {
                           product={product}
                           photoUrl={photoUrl}
                           editMode={editMode}
-                          fitMode={cardFit[product.id] || "fill"}
+                          fitMode={cardFit[product.id] || "fit"}
                           onSetFit={(fit) => handleSetCardFit(product.id, fit)}
                           onUpload={(e) => {
                             if (e.target.files?.[0]) {
@@ -3286,7 +3373,7 @@ export default function App() {
                           product={product}
                           photoUrl={photoUrl}
                           editMode={editMode}
-                          fitMode={cardFit[product.id] || "fill"}
+                          fitMode={cardFit[product.id] || "fit"}
                           onSetFit={(fit) => handleSetCardFit(product.id, fit)}
                           onUpload={(e) => {
                             if (e.target.files?.[0]) {
@@ -3887,10 +3974,23 @@ export default function App() {
       {editMode && (
         <aside
           aria-label="Owner edit mode controls"
-          className="fixed bottom-4 left-4 z-50 bg-[#1F2B20] text-[#FFFFFF] text-xs font-bold px-4 py-2 rounded-full shadow-[0_8px_24px_rgba(60,45,20,0.20)] border border-[#EEE7D6]/20 flex items-center gap-2 select-none animate-in fade-in slide-in-from-bottom-2 duration-150"
+          className="fixed bottom-4 left-4 z-50 bg-[#1F2B20] text-[#FFFFFF] text-xs font-bold px-4 py-2 rounded-full shadow-[0_8px_24px_rgba(60,45,20,0.20)] border border-[#EEE7D6]/20 flex items-center gap-2.5 select-none animate-in fade-in slide-in-from-bottom-2 duration-150"
         >
           <span className="w-2 h-2 rounded-full bg-[#6F8F5F] animate-pulse" />
-          <span>Edit mode on</span>
+          <span>Edit mode</span>
+          <span className="text-[#FFFFFF]/40">·</span>
+          <button
+            type="button"
+            onClick={handleResetSavedEdits}
+            className={`cursor-pointer transition-all font-bold ${
+              resetConfirming
+                ? "bg-[#E0764A] text-[#FFFFFF] px-2.5 py-0.5 rounded-full animate-pulse shadow-xs"
+                : "text-[#EEE7D6]/85 hover:text-[#FFFFFF] underline"
+            }`}
+            title="Clear saved cards, photos and text on this device"
+          >
+            {resetConfirming ? "Confirm reset?" : "Reset saved edits"}
+          </button>
           <span className="text-[#FFFFFF]/40">·</span>
           <button
             type="button"
