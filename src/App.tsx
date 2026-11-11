@@ -2200,6 +2200,12 @@ export default function App() {
 
   // Helper to read card text with user edits
   const getProductField = (product: Product, field: "name" | "label" | "description" | "price"): string => {
+    // Prevent prod-4 (Midi clutch) from displaying as duplicate Maxi clutch
+    if (product.id === "prod-4" && field === "name") {
+      if (cardEdits[product.id]?.name?.toLowerCase().includes("maxi clutch")) {
+        return "Midi clutch";
+      }
+    }
     if (cardEdits[product.id] && cardEdits[product.id][field]) {
       const val = cardEdits[product.id][field]!;
       // Prevent stale Lorem Ipsum placeholder text from overriding real products
@@ -2271,6 +2277,20 @@ export default function App() {
               const mapped: Product[] = parsed.map((p: Product): Product => {
                 const defaultProd = PRODUCTS.find((dp) => dp.id === p.id);
                 const isOffShoulder = p.id === "prod-7" || p.name?.toLowerCase().includes("off shoulder");
+
+                // If prod-4, ensure it remains Midi clutch
+                if (p.id === "prod-4") {
+                  return {
+                    ...p,
+                    name: "Midi clutch",
+                    label: "CLUTCH",
+                    description: "perfect for dressing up!",
+                    price: "KES 2,450",
+                    category: "in-stock" as const,
+                    image: p.image || defaultProd?.image,
+                  };
+                }
+
                 const isMaxiClutch = p.id === "prod-5" || p.name?.toLowerCase().includes("maxi clutch");
                 return {
                   ...p,
@@ -2284,13 +2304,24 @@ export default function App() {
                 };
               });
 
-              // Deduplicate any duplicate cards (e.g. Maxi clutch in in-stock)
+              // Eliminate any second Maxi clutch card: keep only one!
+              let hasMaxiClutch = false;
               const seenInStock = new Set<string>();
               const seenPast = new Set<string>();
               const deduped: Product[] = [];
 
               for (const item of mapped) {
                 const normName = (item.name || "").trim().toLowerCase();
+                const isMaxi = item.id === "prod-5" || normName === "maxi clutch" || normName.includes("maxi clutch");
+
+                if (isMaxi) {
+                  if (hasMaxiClutch) {
+                    // Do away with the second maxi clutch card!
+                    continue;
+                  }
+                  hasMaxiClutch = true;
+                }
+
                 if (item.category === "in-stock") {
                   if (seenInStock.has(normName)) continue;
                   seenInStock.add(normName);
@@ -2302,12 +2333,12 @@ export default function App() {
               }
 
               // Ensure Maxi clutch is present exactly once in in-stock
-              if (!seenInStock.has("maxi clutch")) {
+              if (!hasMaxiClutch) {
                 const maxiClutchDefault = PRODUCTS.find((dp) => dp.id === "prod-5");
                 if (maxiClutchDefault) deduped.push(maxiClutchDefault);
               }
 
-              // Update storage with deduplicated list if needed
+              // Update storage with deduplicated list so the deletion is permanent
               if (deduped.length !== parsed.length) {
                 try {
                   localStorage.setItem("ms_sage_products_custom", JSON.stringify(deduped));
@@ -2324,6 +2355,68 @@ export default function App() {
     }
     return PRODUCTS;
   });
+
+  // On mount: ensure any second Maxi clutch card in localStorage/state is permanently deleted
+  useEffect(() => {
+    try {
+      if (typeof window !== "undefined") {
+        // 1. Clear cardEdits if prod-4 was edited to Maxi clutch
+        const savedEdits = localStorage.getItem("ms_sage_card_edits");
+        if (savedEdits) {
+          const parsedEdits = JSON.parse(savedEdits);
+          if (parsedEdits && parsedEdits["prod-4"]?.name?.toLowerCase().includes("maxi clutch")) {
+            delete parsedEdits["prod-4"].name;
+            localStorage.setItem("ms_sage_card_edits", JSON.stringify(parsedEdits));
+            setCardEdits(parsedEdits);
+          }
+        }
+
+        // 2. Remove duplicate maxi clutch from products & localStorage
+        setProducts((prev) => {
+          let seenMaxi = false;
+          let changed = false;
+          const cleaned: Product[] = [];
+
+          for (const p of prev) {
+            const norm = (p.name || "").trim().toLowerCase();
+            const isMaxi = p.id === "prod-5" || norm === "maxi clutch" || norm.includes("maxi clutch");
+
+            if (isMaxi) {
+              if (seenMaxi) {
+                // Delete the second maxi clutch card!
+                changed = true;
+                continue;
+              }
+              seenMaxi = true;
+            }
+
+            // Restore prod-4 to Midi clutch if it was renamed
+            if (p.id === "prod-4" && norm.includes("maxi clutch")) {
+              changed = true;
+              cleaned.push({
+                ...p,
+                name: "Midi clutch",
+                label: "CLUTCH",
+                price: "KES 2,450",
+                description: "perfect for dressing up!",
+              });
+              continue;
+            }
+
+            cleaned.push(p);
+          }
+
+          if (changed) {
+            try {
+              localStorage.setItem("ms_sage_products_custom", JSON.stringify(cleaned));
+            } catch {}
+            return cleaned;
+          }
+          return prev;
+        });
+      }
+    } catch {}
+  }, []);
 
   const persistProducts = (newProducts: Product[]) => {
     setProducts(newProducts);
@@ -2525,14 +2618,28 @@ export default function App() {
 
   const inStockProducts = React.useMemo(() => {
     const list = products.filter((p) => p.category === "in-stock");
+    let hasMaxiClutch = false;
     const seen = new Set<string>();
-    return list.filter((p) => {
-      const norm = (p.name || "").trim().toLowerCase();
-      if (seen.has(norm)) return false;
-      seen.add(norm);
-      return true;
-    });
-  }, [products]);
+    const result: Product[] = [];
+
+    for (const p of list) {
+      const displayName = getProductField(p, "name").trim().toLowerCase();
+      const isMaxi = p.id === "prod-5" || displayName === "maxi clutch" || displayName.includes("maxi clutch");
+
+      if (isMaxi) {
+        if (hasMaxiClutch) {
+          // Exactly what the user asked: do away with the second maxi clutch card!
+          continue;
+        }
+        hasMaxiClutch = true;
+      }
+
+      if (seen.has(displayName)) continue;
+      seen.add(displayName);
+      result.push(p);
+    }
+    return result;
+  }, [products, cardEdits]);
 
   const pastCreationsProducts = React.useMemo(() => {
     const list = products.filter((p) => p.category === "past-creation");
