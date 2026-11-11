@@ -20,7 +20,6 @@ import {
   Send,
   HelpCircle,
   Sliders,
-  Search,
   RefreshCw,
 } from "lucide-react";
 import defaultHeroImage from "./assets/hero_featured.png";
@@ -2625,21 +2624,8 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Far right: Search icon, Cart icon, Hamburger menu icon */}
+              {/* Far right: Cart icon, Hamburger menu icon */}
               <div className="flex items-center gap-1 sm:gap-1.5 z-10 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveSection("shop");
-                    const el = document.getElementById("shop");
-                    el?.scrollIntoView({ behavior: "smooth" });
-                  }}
-                  aria-label="Search or explore shop"
-                  className="w-9 h-9 rounded-full flex items-center justify-center text-[#1F2B20] hover:text-[#6F8F5F] hover:bg-[#EEE7D6]/60 transition-colors duration-250 cursor-pointer"
-                >
-                  <Search className="w-5 h-5 stroke-[2]" />
-                </button>
-
                 <button
                   type="button"
                   onClick={() => setCartOpen(true)}
@@ -3497,10 +3483,10 @@ export default function App() {
                   ms.sage creates is an independent slow-fiber practice rooted in Nairobi, Kenya, celebrating the meditative artistry of intentional hand-stitching.
                 </p>
                 <p>
-                  For now, we're focusing on bags. Every piece is made stitch by stitch to celebrate individual expression and enduring comfort. Rather than mass-producing, we craft small-batch drops and made-to-measure pieces designed to fit seamlessly into your daily life.
+                  For now, bags are our focus. Every piece is made to order, stitch by stitch, to celebrate individual expression and enduring comfort. We crochet each piece just for you, designed to fit seamlessly into your daily life.
                 </p>
                 <p>
-                  We'll be expanding to more pieces later, so stay tuned.
+                  Have something else in mind? Tell us your idea and we'll let you know if we can bring it to life.
                 </p>
               </div>
 
